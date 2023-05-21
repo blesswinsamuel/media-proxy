@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -40,9 +43,8 @@ func main() {
 
 	baseURL := os.Getenv("BASE_URL")
 	baseURL = strings.TrimSuffix(baseURL, "/")
-	baseURLParsed, err := url.Parse(baseURL)
-	if err != nil {
-		log.Fatal().Err(err).Msgf("Failed to parse BASE_URL")
+	if baseURL != "" {
+		baseURL = baseURL + "/"
 	}
 	cachePath := getEnv("CACHE_PATH", "/tmp/cache")
 	enableUnsafe, err := strconv.ParseBool(getEnv("ENABLE_UNSAFE", "false"))
@@ -50,6 +52,12 @@ func main() {
 		log.Fatal().Err(err).Msgf("Failed to parse ENABLE_UNSAFE")
 	}
 	port := getEnv("PORT", "8080")
+	secret := getEnv("SECRET", "")
+	if !enableUnsafe {
+		if secret == "" {
+			log.Fatal().Msg("SECRET must be set when ENABLE_UNSAFE=false")
+		}
+	}
 
 	cache := &FsCache{
 		cachePath: cachePath,
@@ -61,7 +69,8 @@ func main() {
 
 	server := NewServer(ServerConfig{
 		Port:         port,
-		BaseURL:      baseURLParsed,
+		BaseURL:      baseURL,
+		Secret:       secret,
 		EnableUnsafe: enableUnsafe,
 		AutoAvif:     true,
 		AutoWebp:     true,
@@ -80,7 +89,8 @@ func main() {
 
 type ServerConfig struct {
 	Port         string
-	BaseURL      *url.URL
+	BaseURL      string
+	Secret       string
 	EnableUnsafe bool
 	AutoAvif     bool
 	AutoWebp     bool
@@ -127,13 +137,17 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	mediaPath := chi.URLParam(r, "*")
 
 	if !s.config.EnableUnsafe {
-		if !validateSignature(signature, mediaPath) {
+		mp := mediaPath
+		if r.URL.RawQuery != "" {
+			mp = mp + "?" + r.URL.RawQuery
+		}
+		if !s.validateSignature(signature, mp) {
 			http.Error(w, "Invalid signature", http.StatusForbidden)
 			return
 		}
 	}
 
-	upstreamURL, err := url.Parse(fmt.Sprintf("%s/%s", s.config.BaseURL.String(), mediaPath))
+	upstreamURL, err := url.Parse(fmt.Sprintf("%s%s", s.config.BaseURL, mediaPath))
 	if err != nil {
 		http.Error(w, "Failed to parse upstream URL", http.StatusInternalServerError)
 		log.Error().Err(err).Msg("Failed to parse upstream URL")
@@ -150,7 +164,6 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	requestParams, err := parseQuery(r.URL.Query())
 	if err != nil {
-		http.Error(w, "Failed to parse query", http.StatusBadRequest)
 		log.Error().Err(err).Msg("Failed to parse query")
 		return
 	}
@@ -171,8 +184,13 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// http.Error(w, "invalid content type", http.StatusInternalServerError)
 }
 
-func validateSignature(signature string, imagePath string) bool {
-	return true
+func (s *server) validateSignature(signature string, imagePath string) bool {
+	hash := hmac.New(sha1.New, []byte(s.config.Secret))
+	hash.Write([]byte(imagePath))
+	expectedHash := base64.URLEncoding.EncodeToString(hash.Sum(nil))
+	// expectedHash = expectedHash[:40]
+	// log.Debug().Msgf("expected hash (%s): %s", imagePath, expectedHash)
+	return expectedHash == signature
 }
 
 func parseQuery(query url.Values) (*RequestParams, error) {

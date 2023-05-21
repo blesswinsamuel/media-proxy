@@ -1,0 +1,22 @@
+version: 3
+
+tasks:
+  open-file:
+    cmds:
+      - open "http://localhost:8080/{{ .HASH }}/{{ .PATH }}"
+    vars:
+      SECRET: 87qxbryf7q3ghncfqw7eohqwe7fhcnoaweihno
+      PATH: images/mitc/cover.jpg?metadata=t
+      HASH_SCRIPT: |
+        const crypto = require('crypto')
+        const secret = "{{ .SECRET }}"
+        const path = "{{ .PATH }}"
+        const hash = crypto.createHmac('sha1', secret)
+          .update(path)
+          .digest('base64')
+          .slice(0, 40)
+          .replace(/\+/g, '-').replace(/\//g, '_')
+        console.log(hash)
+      HASH:
+        sh: |
+          echo {{ .HASH_SCRIPT | shellQuote }} | node
