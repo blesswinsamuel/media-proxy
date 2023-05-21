@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/davidbyttow/govips/v2/vips"
+	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog/log"
 )
 
 func getEnv(key, defaultValue string) string {
@@ -35,75 +39,104 @@ func main() {
 	defer vips.Shutdown()
 
 	baseURL := os.Getenv("BASE_URL")
+	baseURL = strings.TrimSuffix(baseURL, "/")
 	baseURLParsed, err := url.Parse(baseURL)
 	if err != nil {
-		log.Fatal("Failed to parse BASE_URL:", err)
+		log.Fatal().Err(err).Msgf("Failed to parse BASE_URL")
 	}
+	cachePath := getEnv("CACHE_PATH", "/tmp/cache")
+	enableUnsafe, err := strconv.ParseBool(getEnv("ENABLE_UNSAFE", "false"))
+	if err != nil {
+		log.Fatal().Err(err).Msgf("Failed to parse ENABLE_UNSAFE")
+	}
+	port := getEnv("PORT", "8080")
 
 	cache := &FsCache{
-		cachePath: getEnv("CACHE_PATH", "/tmp/cache"),
+		cachePath: cachePath,
 	}
 
 	mediaProcessor := &MediaProcessor{
 		cache: cache,
 	}
 
-	server := &server{
-		baseURL:        baseURLParsed,
-		enableUnsafe:   getEnv("ENABLE_UNSAFE", "false") == "true",
-		mediaProcessor: mediaProcessor,
-	}
+	server := NewServer(ServerConfig{
+		Port:         port,
+		BaseURL:      baseURLParsed,
+		EnableUnsafe: enableUnsafe,
+		AutoAvif:     true,
+		AutoWebp:     true,
+	}, mediaProcessor)
 
 	// Start the server
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		server.handleRequest(w, r)
-	})
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080" // Default port
-	}
-
-	go func() {
-		log.Printf("Server listening on port %s", port)
-		log.Fatal(http.ListenAndServe(":"+port, nil))
-	}()
+	server.Start()
 
 	// graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
-	log.Println("Shutting down...")
+	log.Info().Msg("Shutting down...")
+	server.Stop()
+}
+
+type ServerConfig struct {
+	Port         string
+	BaseURL      *url.URL
+	EnableUnsafe bool
+	AutoAvif     bool
+	AutoWebp     bool
 }
 
 type server struct {
-	baseURL        *url.URL
-	enableUnsafe   bool
 	mediaProcessor *MediaProcessor
-	autoAvif       bool
-	autoWebp       bool
+	config         ServerConfig
+	srv            *http.Server
+}
+
+func NewServer(config ServerConfig, mediaProcessor *MediaProcessor) *server {
+	mux := chi.NewRouter()
+	srv := &http.Server{
+		Addr:    ":" + config.Port,
+		Handler: mux,
+	}
+	s := &server{
+		config:         config,
+		mediaProcessor: mediaProcessor,
+		srv:            srv,
+	}
+	mux.HandleFunc("/{signature}/*", s.handleRequest)
+	return s
+}
+
+func (s *server) Start() {
+	go func() {
+		log.Printf("Server listening on port %s", s.srv.Addr)
+		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("")
+		}
+	}()
+}
+
+func (s *server) Stop() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s.srv.Shutdown(ctx)
 }
 
 func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
-	parts := strings.SplitN(r.URL.Path, "/", 3)
-	if len(parts) != 3 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-	signature := parts[1]
-	imagePath := parts[2]
+	signature := chi.URLParam(r, "signature")
+	mediaPath := chi.URLParam(r, "*")
 
-	if !s.enableUnsafe {
-		if !validateSignature(signature, imagePath) {
+	if !s.config.EnableUnsafe {
+		if !validateSignature(signature, mediaPath) {
 			http.Error(w, "Invalid signature", http.StatusForbidden)
 			return
 		}
 	}
 
-	upstreamURL, err := url.Parse(fmt.Sprintf("%s/%s", s.baseURL.String(), imagePath))
+	upstreamURL, err := url.Parse(fmt.Sprintf("%s/%s", s.config.BaseURL.String(), mediaPath))
 	if err != nil {
 		http.Error(w, "Failed to parse upstream URL", http.StatusInternalServerError)
-		log.Println("Failed to parse upstream URL:", err)
+		log.Error().Err(err).Msg("Failed to parse upstream URL")
 		return
 	}
 
@@ -111,14 +144,14 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	imageBytes, err := s.mediaProcessor.fetchMedia(r.Context(), upstreamURL)
 	if err != nil {
 		http.Error(w, "Failed to fetch image", http.StatusInternalServerError)
-		log.Println("Failed to fetch image:", err)
+		log.Error().Err(err).Msg("Failed to fetch image")
 		return
 	}
 
-	transformOptions, err := parseQuery(r.URL.Query())
+	requestParams, err := parseQuery(r.URL.Query())
 	if err != nil {
 		http.Error(w, "Failed to parse query", http.StatusBadRequest)
-		log.Println("Failed to parse query:", err)
+		log.Error().Err(err).Msg("Failed to parse query")
 		return
 	}
 
@@ -126,10 +159,10 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// fmt.Println(contentType)
 	// if strings.HasPrefix(contentType, "image/") {
 	// Transform the image using libvips
-	bytes, contentType, err := s.mediaProcessor.processMedia(imageBytes, *transformOptions)
+	bytes, contentType, err := s.mediaProcessor.processRequest(imageBytes, *requestParams)
 	if err != nil {
-		log.Println("Image transformation failed:", err)
 		http.Error(w, "Image transformation failed", http.StatusInternalServerError)
+		log.Error().Err(err).Msg("Image transformation failed")
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -142,9 +175,22 @@ func validateSignature(signature string, imagePath string) bool {
 	return true
 }
 
-func parseQuery(query url.Values) (*TransformOptions, error) {
-	transformOptions := &TransformOptions{}
+func parseQuery(query url.Values) (*RequestParams, error) {
+	requestOptions := &RequestParams{}
 
+	// metadata request
+	metadata, err := strconv.ParseBool(query.Get("metadata"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid metadata parameter: %s", query.Get("metadata"))
+	}
+	if metadata {
+		requestOptions.MetadataRequest = &MetadataRequest{}
+		return requestOptions, nil
+	}
+
+	// transform request
+	requestOptions.TransformRequest = &TransformRequest{}
+	transformRequest := requestOptions.TransformRequest
 	resizeParam := query.Get("resize")
 	if resizeParam != "" {
 		var width, height int
@@ -152,8 +198,8 @@ func parseQuery(query url.Values) (*TransformOptions, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid resize parameter: %s", resizeParam)
 		}
-		transformOptions.Resize = &TransformOptionsResize{Width: width, Height: height}
+		transformRequest.Resize = &TransformRequestResize{Width: width, Height: height}
 	}
 
-	return transformOptions, nil
+	return requestOptions, nil
 }

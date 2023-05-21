@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -12,17 +14,25 @@ import (
 	"github.com/davidbyttow/govips/v2/vips"
 )
 
-type TransformOptionsResize struct {
-	Width  int
-	Height int
-}
-
-type TransformOptions struct {
+type MetadataRequest struct {
 	// https://evanw.github.io/thumbhash/
 	ThumbHash bool
 	// https://github.com/woltapp/blurhash
 	BlurHash bool
-	Resize   *TransformOptionsResize
+}
+
+type TransformRequestResize struct {
+	Width  int
+	Height int
+}
+
+type TransformRequest struct {
+	Resize *TransformRequestResize
+}
+
+type RequestParams struct {
+	MetadataRequest  *MetadataRequest
+	TransformRequest *TransformRequest
 }
 
 type MediaProcessor struct {
@@ -85,7 +95,43 @@ func (mp *MediaProcessor) fetchMedia(ctx context.Context, upstreamURL *url.URL) 
 	return img, nil
 }
 
-func (mp *MediaProcessor) processMedia(imageBytes []byte, transformOptions TransformOptions) ([]byte, string, error) {
+func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams) ([]byte, string, error) {
+	if params.MetadataRequest != nil {
+		return mp.processMetadataRequest(imageBytes, params.MetadataRequest)
+	}
+	if params.TransformRequest != nil {
+		return mp.processTransformRequest(imageBytes, params.TransformRequest)
+	}
+	return nil, "", errors.New("bug: no request params specified")
+}
+
+func (mp *MediaProcessor) processMetadataRequest(imageBytes []byte, params *MetadataRequest) ([]byte, string, error) {
+	// Load the image using libvips
+	image, err := vips.NewImageFromBuffer(imageBytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load image: %v", err)
+	}
+	defer image.Close()
+	type MetadataResponse struct {
+		Width     int    `json:"width"`
+		Height    int    `json:"height"`
+		NoOfPages int    `json:"noOfPages"`
+		Format    string `json:"format"`
+	}
+	metadata := MetadataResponse{
+		Width:     image.Width(),
+		Height:    image.Height(),
+		NoOfPages: image.Pages(),
+		Format:    vips.ImageTypes[image.Format()],
+	}
+	res, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to marshal metadata: %v", err)
+	}
+	return res, "application/json", nil
+}
+
+func (mp *MediaProcessor) processTransformRequest(imageBytes []byte, params *TransformRequest) ([]byte, string, error) {
 	// Load the image using libvips
 	image, err := vips.NewImageFromBuffer(imageBytes)
 	if err != nil {
@@ -94,9 +140,9 @@ func (mp *MediaProcessor) processMedia(imageBytes []byte, transformOptions Trans
 	defer image.Close()
 
 	// height := image.Height() * width / image.Width()
-	if transformOptions.Resize != nil {
-		width := transformOptions.Resize.Width
-		height := transformOptions.Resize.Height
+	if params.Resize != nil {
+		width := params.Resize.Width
+		height := params.Resize.Height
 		err = image.Thumbnail(width, height, vips.InterestingAttention)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to resize image: %v", err)
