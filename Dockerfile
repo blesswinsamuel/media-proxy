@@ -2,7 +2,7 @@ FROM golang:1.20-alpine AS builder
 
 WORKDIR /app
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git build-base pkgconfig vips-dev
 
 # RUN go get github.com/githubnemo/CompileDaemon
 
@@ -13,9 +13,11 @@ COPY . .
 
 ARG TARGETOS
 ARG TARGETARCH
-RUN go build -ldflags="-s -w" -o media-proxy .
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o media-proxy .
 
 FROM alpine
+
+RUN apk add --no-cache vips
 
 # Copy our static executable.
 COPY --from=builder /app/media-proxy /go/bin/media-proxy
