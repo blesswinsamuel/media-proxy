@@ -1,0 +1,22 @@
+name: Docker
+
+on:
+  push:
+    branches:
+      - main
+
+    tags:
+      - v*
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: blesswinsamuel/github-actions/docker-build-and-push@main
+        with:
+          docker-registry: docker.io
+          docker-password: ${{ secrets.DOCKERHUB_ACCESS_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
+          docker-build-platforms: linux/amd64,linux/arm64
