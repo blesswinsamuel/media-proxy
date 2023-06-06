@@ -20,3 +20,7 @@ tasks:
       HASH:
         sh: |
           echo {{ .HASH_SCRIPT | shellQuote }} | node
+
+  podman-buildx:
+    cmds:
+      - podman buildx build --platform linux/arm64,linux/amd64 . -t blesswinsamuel/media-proxy
