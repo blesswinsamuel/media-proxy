@@ -6,7 +6,7 @@ tasks:
       - open "http://localhost:8080/{{ .HASH }}/{{ .PATH }}"
     vars:
       SECRET: 87qxbryf7q3ghncfqw7eohqwe7fhcnoaweihno
-      PATH: images/mitc/cover.jpg?metadata=t
+      PATH: "{{ .CLI_ARGS | splitArgs | first }}"
       HASH_SCRIPT: |
         const crypto = require('crypto')
         const secret = "{{ .SECRET }}"

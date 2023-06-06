@@ -197,18 +197,18 @@ func parseQuery(query url.Values) (*RequestParams, error) {
 	requestOptions := &RequestParams{}
 
 	// metadata request
-	metadata, err := strconv.ParseBool(query.Get("metadata"))
-	if err != nil {
-		return nil, fmt.Errorf("invalid metadata parameter: %s", query.Get("metadata"))
-	}
-	if metadata {
-		requestOptions.MetadataRequest = &MetadataRequest{}
-		return requestOptions, nil
+	if metadata := query.Get("metadata"); metadata != "" {
+		metadata, err := strconv.ParseBool(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("invalid metadata parameter: %q", query.Get("metadata"))
+		}
+		if metadata {
+			requestOptions.MetadataOptions = &MetadataOptions{}
+		}
 	}
 
 	// transform request
-	requestOptions.TransformRequest = &TransformRequest{}
-	transformRequest := requestOptions.TransformRequest
+	transformRequest := TransformOptions{}
 	resizeParam := query.Get("resize")
 	if resizeParam != "" {
 		var width, height int
@@ -216,8 +216,26 @@ func parseQuery(query url.Values) (*RequestParams, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid resize parameter: %s", resizeParam)
 		}
-		transformRequest.Resize = &TransformRequestResize{Width: width, Height: height}
+		transformRequest.Resize = &TransformOptionsResize{Width: width, Height: height}
 	}
+	dpi := query.Get("dpi")
+	if dpi != "" {
+		dpiInt, err := strconv.Atoi(dpi)
+		if err != nil {
+			return nil, fmt.Errorf("invalid dpi parameter: %s", dpi)
+		}
+		transformRequest.Dpi = dpiInt
+	}
+
+	pageNo := query.Get("page")
+	if pageNo != "" {
+		pageNoInt, err := strconv.Atoi(pageNo)
+		if err != nil {
+			return nil, fmt.Errorf("invalid pageNo parameter: %s", pageNo)
+		}
+		transformRequest.PageNo = pageNoInt
+	}
+	requestOptions.TransformOptions = transformRequest
 
 	return requestOptions, nil
 }
