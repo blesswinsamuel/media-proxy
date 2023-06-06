@@ -30,6 +30,24 @@ func getEnv(key, defaultValue string) string {
 
 func main() {
 	// Set up libvips concurrency level
+	vips.LoggingSettings(func(messageDomain string, messageLevel vips.LogLevel, message string) {
+		var messageLevelDescription string
+		switch messageLevel {
+		case vips.LogLevelError:
+			messageLevelDescription = "error"
+		case vips.LogLevelCritical:
+			messageLevelDescription = "critical"
+		case vips.LogLevelWarning:
+			messageLevelDescription = "warning"
+		case vips.LogLevelMessage:
+			messageLevelDescription = "message"
+		case vips.LogLevelInfo:
+			messageLevelDescription = "info"
+		case vips.LogLevelDebug:
+			messageLevelDescription = "debug"
+		}
+		log.Debug().Str("domain", messageDomain).Str("level", messageLevelDescription).Msg(message)
+	}, vips.LogLevelWarning)
 	vips.Startup(&vips.Config{
 		ConcurrencyLevel: 1,
 		MaxCacheFiles:    0,
@@ -168,6 +186,36 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if requestParams.OutputFormat == "" {
+		contentType := http.DetectContentType(imageBytes)
+		acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
+		if len(acceptedContentTypes) > 0 {
+			for _, acceptedContentType := range acceptedContentTypes {
+				if acceptedContentType == "image/avif" {
+					continue
+				}
+				if strings.HasPrefix(acceptedContentType, "image/") {
+					contentType = strings.TrimSpace(acceptedContentType)
+					break
+				}
+			}
+		}
+		switch contentType {
+		case "image/jpeg":
+			requestParams.OutputFormat = "jpeg"
+		case "image/png":
+			requestParams.OutputFormat = "png"
+		case "image/avif":
+			requestParams.OutputFormat = "avif"
+		case "image/webp":
+			requestParams.OutputFormat = "webp"
+		case "image/apng":
+			requestParams.OutputFormat = "apng"
+		default:
+			requestParams.OutputFormat = "png"
+		}
+	}
+
 	// contentType := resp.Header.Get("Content-Type")
 	// fmt.Println(contentType)
 	// if strings.HasPrefix(contentType, "image/") {
@@ -179,6 +227,8 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Content-Length", strconv.Itoa(len(bytes)))
 	w.Write(bytes)
 	// }
 	// http.Error(w, "invalid content type", http.StatusInternalServerError)
@@ -202,21 +252,57 @@ func parseQuery(query url.Values) (*RequestParams, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid metadata parameter: %q", query.Get("metadata"))
 		}
+		metadataOptions := &MetadataOptions{}
+		if thumbhash := query.Get("metadata.thumbhash"); thumbhash != "" {
+			thumbhash, err := strconv.ParseBool(thumbhash)
+			if err != nil {
+				return nil, fmt.Errorf("invalid thumbhash parameter: %q", query.Get("thumbhash"))
+			}
+			metadataOptions.ThumbHash = thumbhash
+		}
+		if blurhash := query.Get("metadata.blurhash"); blurhash != "" {
+			blurhash, err := strconv.ParseBool(blurhash)
+			if err != nil {
+				return nil, fmt.Errorf("invalid blurhash parameter: %q", query.Get("blurhash"))
+			}
+			metadataOptions.BlurHash = blurhash
+		}
 		if metadata {
-			requestOptions.MetadataOptions = &MetadataOptions{}
+			requestOptions.MetadataOptions = metadataOptions
 		}
 	}
 
 	// transform request
 	transformRequest := TransformOptions{}
-	resizeParam := query.Get("resize")
-	if resizeParam != "" {
-		var width, height int
-		_, err := fmt.Sscanf(resizeParam, "%dx%d", &width, &height)
+	var resizeOpts TransformOptionsResize
+	if width := query.Get("resize.width"); width != "" {
+		widthInt, err := strconv.Atoi(width)
 		if err != nil {
-			return nil, fmt.Errorf("invalid resize parameter: %s", resizeParam)
+			return nil, fmt.Errorf("invalid resize.width parameter: %s", width)
 		}
-		transformRequest.Resize = &TransformOptionsResize{Width: width, Height: height}
+		resizeOpts.Width = widthInt
+	}
+	if height := query.Get("resize.height"); height != "" {
+		heightInt, err := strconv.Atoi(height)
+		if err != nil {
+			return nil, fmt.Errorf("invalid resize.height parameter: %s", height)
+		}
+		resizeOpts.Height = heightInt
+	}
+	// resizeMethod := query.Get("resize.method") // fill or fit
+	// if resizeMethod != "" {
+	// 	resizeOpts.Method = resizeMethod
+	// } else {
+	// 	resizeOpts.Method = "fill"
+	// }
+	// resizeGravity := query.Get("resize.gravity") // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
+	// if resizeGravity != "" {
+	// 	resizeOpts.Gravity = resizeGravity
+	// } else {
+	// 	resizeOpts.Gravity = "smart"
+	// }
+	if resizeOpts.Width != 0 || resizeOpts.Height != 0 {
+		transformRequest.Resize = &resizeOpts
 	}
 	dpi := query.Get("dpi")
 	if dpi != "" {
@@ -225,6 +311,14 @@ func parseQuery(query url.Values) (*RequestParams, error) {
 			return nil, fmt.Errorf("invalid dpi parameter: %s", dpi)
 		}
 		transformRequest.Dpi = dpiInt
+	}
+	raw := query.Get("raw")
+	if raw != "" {
+		rawBool, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid raw parameter: %s", dpi)
+		}
+		transformRequest.Raw = rawBool
 	}
 
 	pageNo := query.Get("page")

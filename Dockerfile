@@ -35,4 +35,4 @@ RUN apk add --no-cache gcompat vips
 
 COPY --from=builder /app/media-proxy /go/bin/media-proxy
 
-CMD ["/go/bin/media-proxy"]
+ENTRYPOINT ["/go/bin/media-proxy"]

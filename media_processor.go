@@ -1,16 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
 
+	"github.com/bbrks/go-blurhash"
 	"github.com/davidbyttow/govips/v2/vips"
+	"github.com/galdor/go-thumbhash"
 )
 
 type MetadataOptions struct {
@@ -23,17 +28,21 @@ type MetadataOptions struct {
 type TransformOptionsResize struct {
 	Width  int
 	Height int
+	// Method  string // fill or fit
+	// Gravity string // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
 }
 
 type TransformOptions struct {
 	Resize *TransformOptionsResize
 	Dpi    int
 	PageNo int
+	Raw    bool
 }
 
 type RequestParams struct {
 	MetadataOptions  *MetadataOptions
 	TransformOptions TransformOptions
+	OutputFormat     string
 }
 
 type MediaProcessor struct {
@@ -96,6 +105,15 @@ func (mp *MediaProcessor) fetchMedia(ctx context.Context, upstreamURL *url.URL) 
 	return img, nil
 }
 
+func getContentType(imageBytes []byte) string {
+	contentType := http.DetectContentType(imageBytes)
+	fmt.Println(contentType)
+	if contentType == "text/xml; charset=utf-8" {
+		contentType = "image/svg+xml"
+	}
+	return contentType
+}
+
 func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams) ([]byte, string, error) {
 	// Load the image using libvips
 	importParams := vips.NewImportParams()
@@ -104,6 +122,9 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 	}
 	if params.TransformOptions.PageNo > 0 {
 		importParams.Page.Set(params.TransformOptions.PageNo)
+	}
+	if params.TransformOptions.Raw {
+		return imageBytes, getContentType(imageBytes), nil
 	}
 
 	image, err := vips.LoadImageFromBuffer(imageBytes, importParams)
@@ -116,6 +137,22 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 	if resize := params.TransformOptions.Resize; resize != nil {
 		width := resize.Width
 		height := resize.Height
+		if width == 0 {
+			width = height * image.Width() / image.Height()
+		}
+		if height == 0 {
+			height = width * image.Height() / image.Width()
+		}
+		// switch resize.Method {
+		// case "fill":
+		// 	err = image.Thumbnail(width, height, vips.InterestingAttention)
+		// 	if err != nil {
+		// 		return nil, "", fmt.Errorf("failed to resize image: %v", err)
+		// 	}
+		// case "fit":
+		// default:
+		// 	return nil, "", fmt.Errorf("invalid resize method: %s", resize.Method)
+		// }
 		err = image.Thumbnail(width, height, vips.InterestingAttention)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to resize image: %v", err)
@@ -126,24 +163,75 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 		return mp.processMetadataRequest(image, params.MetadataOptions)
 	}
 
-	ep := vips.NewDefaultJPEGExportParams()
-	outputBytes, _, err := image.Export(ep)
-	contentType := "image/jpeg"
-	return outputBytes, contentType, err
+	switch params.OutputFormat {
+	case "jpeg":
+		ep := vips.NewDefaultJPEGExportParams()
+		outputBytes, _, err := image.Export(ep)
+		return outputBytes, "image/jpeg", err
+	case "png":
+		ep := vips.NewDefaultPNGExportParams()
+		outputBytes, _, err := image.Export(ep)
+		return outputBytes, "image/png", err
+	case "avif":
+		ep := vips.NewAvifExportParams()
+		outputBytes, _, err := image.ExportAvif(ep)
+		return outputBytes, "image/avif", err
+	case "webp":
+		ep := vips.NewWebpExportParams()
+		outputBytes, _, err := image.ExportWebp(ep)
+		return outputBytes, "image/webp", err
+	default:
+		return nil, "", fmt.Errorf("invalid output format: %s", params.OutputFormat)
+	}
 }
 
-func (mp *MediaProcessor) processMetadataRequest(image *vips.ImageRef, params *MetadataOptions) ([]byte, string, error) {
+func (mp *MediaProcessor) processMetadataRequest(img *vips.ImageRef, params *MetadataOptions) ([]byte, string, error) {
 	type MetadataResponse struct {
 		Width     int    `json:"width"`
 		Height    int    `json:"height"`
 		NoOfPages int    `json:"noOfPages"`
 		Format    string `json:"format"`
+		Blurhash  string `json:"blurhash,omitempty"`
+		Thumbhash string `json:"thumbhash,omitempty"`
 	}
 	metadata := MetadataResponse{
-		Width:     image.Width(),
-		Height:    image.Height(),
-		NoOfPages: image.Pages(),
-		Format:    vips.ImageTypes[image.Format()],
+		Width:     img.Width(),
+		Height:    img.Height(),
+		NoOfPages: img.Pages(),
+		Format:    vips.ImageTypes[img.Format()],
+	}
+	if params.BlurHash {
+		ep := vips.NewDefaultJPEGExportParams()
+		ep.Quality = 10
+		outputBytes, _, err := img.Export(ep)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to export image: %v", err)
+		}
+		gimg, _, err := image.Decode(bytes.NewReader(outputBytes))
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to decode image: %v", err)
+		}
+		hash, err := blurhash.Encode(5, 5, gimg)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to encode blurhash: %v", err)
+		}
+		metadata.Blurhash = hash
+	}
+	if params.ThumbHash {
+		// ep := vips.NewJpegExportParams()
+		// ep.Quality = 10
+		// outputBytes, _, err := img.ExportJpeg(ep)
+		ep := vips.NewPngExportParams()
+		ep.Quality = 10
+		outputBytes, _, err := img.ExportPng(ep)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to export image: %v", err)
+		}
+		gimg, _, err := image.Decode(bytes.NewReader(outputBytes))
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to decode image: %v", err)
+		}
+		metadata.Thumbhash = base64.StdEncoding.EncodeToString(thumbhash.EncodeImage(gimg))
 	}
 	res, err := json.Marshal(metadata)
 	if err != nil {
