@@ -25,9 +25,13 @@ RUN if [ "${TARGETARCH}" = "arm64" ] ; then \
     fi ; \
     CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o media-proxy .
 
-FROM alpine
+# FROM debian:bookworm-slim
 
-RUN apk add --no-cache vips
+# RUN apt-get update && apt-get install -y libvips && apt-get clean
+
+FROM alpine:latest
+
+RUN apk add --no-cache gcompat vips
 
 COPY --from=builder /app/media-proxy /go/bin/media-proxy
 
