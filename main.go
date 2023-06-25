@@ -64,9 +64,10 @@ func main() {
 		}
 	}
 
-	cache := cache.NewFsCache(cachePath)
+	originalCache := cache.NewFsCache(cachePath + "/original")
+	metadataCache := cache.NewFsCache(cachePath + "/metadata")
 
-	mediaProcessor := mediaprocessor.NewMediaProcessor(cache)
+	mediaProcessor := mediaprocessor.NewMediaProcessor(originalCache)
 
 	server := server.NewServer(server.ServerConfig{
 		Port:         port,
@@ -76,7 +77,7 @@ func main() {
 		EnableUnsafe: enableUnsafe,
 		AutoAvif:     true,
 		AutoWebp:     true,
-	}, mediaProcessor)
+	}, mediaProcessor, metadataCache)
 
 	// Start the server
 	server.Start()

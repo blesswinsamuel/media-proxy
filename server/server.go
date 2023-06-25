@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/blesswinsamuel/media-proxy/mediaprocessor"
 	"github.com/gorilla/schema"
 
@@ -59,9 +60,10 @@ type server struct {
 	config             ServerConfig
 	srv                *http.Server
 	maxConnectionCount int
+	metadataCache      cache.Cache
 }
 
-func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor) *server {
+func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, metadataCache cache.Cache) *server {
 	mux := chi.NewRouter()
 	srv := &http.Server{
 		Addr:              ":" + config.Port,
@@ -85,6 +87,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		mediaProcessor:     mediaProcessor,
 		srv:                srv,
 		maxConnectionCount: 8,
+		metadataCache:      metadataCache,
 	}
 	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
@@ -216,13 +219,20 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := info.RequestParams
-	out, contentType, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
+	cacheKey := cache.Sha256Hash(info.UpstreamURL.String())
+	out, err := cache.GetCachedOrFetch(s.metadataCache, cacheKey, func() ([]byte, error) {
+		out, contentType, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
+		if err != nil {
+			return nil, err
+		}
+		w.Header().Set("Content-Type", contentType)
+		return out, nil
+	})
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process metadata request")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", contentType)
 	w.Write(out)
 }
 

@@ -3,7 +3,6 @@ package mediaprocessor
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -87,7 +86,7 @@ func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamUR
 }
 
 func (mp *MediaProcessor) FetchMedia(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
-	cacheKey := sha256Hash(upstreamURL.String())
+	cacheKey := cache.Sha256Hash(upstreamURL.String())
 	return cache.GetCachedOrFetch(mp.cache, cacheKey, func() ([]byte, error) {
 		return mp.fetchMediaFromUpstream(ctx, upstreamURL)
 	})
@@ -260,11 +259,4 @@ func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *Meta
 		return nil, "", fmt.Errorf("failed to marshal metadata: %v", err)
 	}
 	return res, "application/json", nil
-}
-
-func sha256Hash(data string) string {
-	h := sha256.New()
-	h.Write([]byte(data))
-	bs := h.Sum(nil)
-	return fmt.Sprintf("%x", bs)
 }
