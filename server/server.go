@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/blesswinsamuel/media-proxy/cache"
+	"github.com/blesswinsamuel/media-proxy/loader"
 	"github.com/blesswinsamuel/media-proxy/mediaprocessor"
 	"github.com/gorilla/schema"
 
@@ -48,7 +49,6 @@ var (
 type ServerConfig struct {
 	Port         string
 	MetricsPort  string
-	BaseURL      string
 	Secret       string
 	EnableUnsafe bool
 	AutoAvif     bool
@@ -57,13 +57,14 @@ type ServerConfig struct {
 
 type server struct {
 	mediaProcessor     *mediaprocessor.MediaProcessor
+	loader             loader.Loader
 	config             ServerConfig
 	srv                *http.Server
 	maxConnectionCount int
 	metadataCache      cache.Cache
 }
 
-func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, metadataCache cache.Cache) *server {
+func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, loader loader.Loader, metadataCache cache.Cache) *server {
 	mux := chi.NewRouter()
 	srv := &http.Server{
 		Addr:              ":" + config.Port,
@@ -85,6 +86,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 	s := &server{
 		config:             config,
 		mediaProcessor:     mediaProcessor,
+		loader:             loader,
 		srv:                srv,
 		maxConnectionCount: 8,
 		metadataCache:      metadataCache,
@@ -164,7 +166,6 @@ func NewHTTPError(code int, message string, err error) *HTTPError {
 type RequestInfo[T any] struct {
 	Signature     string
 	MediaPath     string
-	UpstreamURL   *url.URL
 	RequestParams *T
 	ImageBytes    []byte
 }
@@ -185,11 +186,6 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 
 	mediaPath = strings.TrimSuffix(mediaPath, "/")
 
-	upstreamURL, err := url.Parse(fmt.Sprintf("%s%s", s.config.BaseURL, mediaPath))
-	if err != nil {
-		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to parse upstream URL", err)
-	}
-
 	requestParams, err := parseQuery(r.URL.Query())
 	if err != nil {
 		return nil, NewHTTPError(http.StatusBadRequest, "Failed to parse query", err)
@@ -197,7 +193,7 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 	log.Debug().Str("method", r.Method).Stringer("url", r.URL).Any("opts", requestParams).Msg("Incoming Request")
 
 	// Perform the request to the target server
-	imageBytes, err := s.mediaProcessor.FetchMedia(r.Context(), upstreamURL)
+	imageBytes, err := s.loader.GetMedia(r.Context(), mediaPath)
 	if err != nil {
 		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to fetch image", err)
 	}
@@ -205,7 +201,6 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 	return &RequestInfo[T]{
 		Signature:     signature,
 		MediaPath:     mediaPath,
-		UpstreamURL:   upstreamURL,
 		ImageBytes:    imageBytes,
 		RequestParams: requestParams,
 	}, nil
@@ -219,7 +214,7 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := info.RequestParams
-	cacheKey := cache.Sha256Hash(info.UpstreamURL.String())
+	cacheKey := cache.Sha256Hash(info.Signature + info.MediaPath)
 	out, err := cache.GetCachedOrFetch(s.metadataCache, cacheKey, func() ([]byte, error) {
 		out, contentType, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
 		if err != nil {

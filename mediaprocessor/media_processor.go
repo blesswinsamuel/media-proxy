@@ -2,20 +2,15 @@ package mediaprocessor
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
-	"io"
 	"net/http"
-	"net/url"
 
 	"github.com/bbrks/go-blurhash"
-	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/galdor/go-thumbhash"
-	"github.com/rs/zerolog/log"
 )
 
 type ReadOptions struct {
@@ -47,49 +42,10 @@ type TransformOptions struct {
 }
 
 type MediaProcessor struct {
-	cache cache.Cache
 }
 
-func NewMediaProcessor(cache cache.Cache) *MediaProcessor {
-	return &MediaProcessor{
-		cache: cache,
-	}
-}
-
-func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
-	log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
-
-	httpClient := http.DefaultClient
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch image: %w", err)
-	}
-	// defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
-		}
-		resp.Body.Close()
-		return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
-	}
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-	return bodyBytes, nil
-}
-
-func (mp *MediaProcessor) FetchMedia(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
-	cacheKey := cache.Sha256Hash(upstreamURL.String())
-	return cache.GetCachedOrFetch(mp.cache, cacheKey, func() ([]byte, error) {
-		return mp.fetchMediaFromUpstream(ctx, upstreamURL)
-	})
+func NewMediaProcessor() *MediaProcessor {
+	return &MediaProcessor{}
 }
 
 func getContentType(imageBytes []byte) string {

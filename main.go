@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/blesswinsamuel/media-proxy/cache"
+	"github.com/blesswinsamuel/media-proxy/loader"
 	"github.com/blesswinsamuel/media-proxy/mediaprocessor"
 	"github.com/blesswinsamuel/media-proxy/server"
 	"github.com/davidbyttow/govips/v2/vips"
@@ -64,20 +65,20 @@ func main() {
 		}
 	}
 
-	originalCache := cache.NewFsCache(cachePath + "/original")
+	loaderCache := cache.NewFsCache(cachePath + "/original")
 	metadataCache := cache.NewFsCache(cachePath + "/metadata")
 
-	mediaProcessor := mediaprocessor.NewMediaProcessor(originalCache)
+	mediaProcessor := mediaprocessor.NewMediaProcessor()
+	loader := loader.NewHTTPLoader(baseURL, loaderCache)
 
 	server := server.NewServer(server.ServerConfig{
 		Port:         port,
 		MetricsPort:  metricsPort,
-		BaseURL:      baseURL,
 		Secret:       secret,
 		EnableUnsafe: enableUnsafe,
 		AutoAvif:     true,
 		AutoWebp:     true,
-	}, mediaProcessor, metadataCache)
+	}, mediaProcessor, loader, metadataCache)
 
 	// Start the server
 	server.Start()
