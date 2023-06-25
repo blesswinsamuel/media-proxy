@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus"
@@ -103,9 +104,7 @@ func main() {
 		}
 	}
 
-	cache := &FsCache{
-		cachePath: cachePath,
-	}
+	cache := cache.NewFsCache(cachePath)
 
 	mediaProcessor := &MediaProcessor{
 		cache: cache,

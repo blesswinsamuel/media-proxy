@@ -13,6 +13,7 @@ import (
 	"net/url"
 
 	"github.com/bbrks/go-blurhash"
+	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/galdor/go-thumbhash"
 	"github.com/rs/zerolog/log"
@@ -47,7 +48,7 @@ type RequestParams struct {
 }
 
 type MediaProcessor struct {
-	cache *FsCache
+	cache cache.Cache
 }
 
 func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
@@ -79,31 +80,11 @@ func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamUR
 	return bodyBytes, nil
 }
 
-func (mp *MediaProcessor) fetchCachedMedia(ctx context.Context, key string) ([]byte, error) {
-	if exists, err := mp.cache.Exists(key); err != nil {
-		return nil, fmt.Errorf("failed to check if image exists in cache: %w", err)
-	} else if !exists {
-		return nil, nil
-	}
-	return mp.cache.Get(key)
-}
-
 func (mp *MediaProcessor) fetchMedia(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
 	cacheKey := sha256Hash(upstreamURL.String())
-	if cachedImage, err := mp.fetchCachedMedia(ctx, cacheKey); err != nil {
-		return nil, fmt.Errorf("failed to fetch cached image: %w", err)
-	} else if cachedImage != nil {
-		log.Debug().Msgf("Image %s exists in cache %s", upstreamURL.String(), cacheKey)
-		return cachedImage, nil
-	}
-	img, err := mp.fetchMediaFromUpstream(ctx, upstreamURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch image from upstream: %w", err)
-	}
-	if err := mp.cache.Put(cacheKey, img); err != nil {
-		return nil, fmt.Errorf("failed to cache image: %w", err)
-	}
-	return img, nil
+	return cache.GetCachedOrFetch(mp.cache, cacheKey, func() ([]byte, error) {
+		return mp.fetchMediaFromUpstream(ctx, upstreamURL)
+	})
 }
 
 func getContentType(imageBytes []byte) string {
