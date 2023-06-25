@@ -1,4 +1,4 @@
-package main
+package mediaprocessor
 
 import (
 	"bytes"
@@ -51,6 +51,12 @@ type MediaProcessor struct {
 	cache cache.Cache
 }
 
+func NewMediaProcessor(cache cache.Cache) *MediaProcessor {
+	return &MediaProcessor{
+		cache: cache,
+	}
+}
+
 func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
 	log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
 
@@ -80,7 +86,7 @@ func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamUR
 	return bodyBytes, nil
 }
 
-func (mp *MediaProcessor) fetchMedia(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
+func (mp *MediaProcessor) FetchMedia(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
 	cacheKey := sha256Hash(upstreamURL.String())
 	return cache.GetCachedOrFetch(mp.cache, cacheKey, func() ([]byte, error) {
 		return mp.fetchMediaFromUpstream(ctx, upstreamURL)
@@ -119,7 +125,7 @@ func parseVipsInteresting(interesting string) (vips.Interesting, error) {
 	}
 }
 
-func (mp *MediaProcessor) processTransformRequest(imageBytes []byte, params *TransformOptions) ([]byte, string, error) {
+func (mp *MediaProcessor) ProcessTransformRequest(imageBytes []byte, params *TransformOptions) ([]byte, string, error) {
 	// Load the image using libvips
 	importParams := vips.NewImportParams()
 	if params.Read.Dpi > 0 {
@@ -190,7 +196,7 @@ func (mp *MediaProcessor) processTransformRequest(imageBytes []byte, params *Tra
 	}
 }
 
-func (mp *MediaProcessor) processMetadataRequest(imageBytes []byte, params *MetadataOptions) ([]byte, string, error) {
+func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *MetadataOptions) ([]byte, string, error) {
 	importParams := vips.NewImportParams()
 	if params.Read.Dpi > 0 {
 		importParams.Density.Set(params.Read.Dpi)
