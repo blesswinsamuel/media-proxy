@@ -1,6 +1,12 @@
 version: 3
 
 tasks:
+  start:
+    cmds:
+      # CGO_CFLAGS_ALLOW="-Xpreprocessor"
+      # tip: do `brew reinstall vips` if you run across any error while compiling
+      - SECRET=mylocalsecret go run .
+
   open-file:
     cmds:
       - open "http://localhost:8080/{{ .HASH }}/{{ .PATH }}"

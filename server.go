@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/base64"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -17,7 +18,31 @@ import (
 
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+	"golang.org/x/net/netutil"
+)
+
+var (
+	requestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "media_proxy_request_duration_seconds",
+		Help:    "Request duration in seconds",
+		Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10},
+	}, []string{"method", "path", "status_code"})
+	activeRequests = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "media_proxy_active_requests",
+		Help: "Active requests",
+	})
+	activeConns = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "media_proxy_active_conns",
+		Help: "Active connections",
+	})
+	networkConns = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "media_proxy_network_conns_count",
+		Help: "Network connections count",
+	}, []string{"state"})
 )
 
 func getEnv(key, defaultValue string) string {
@@ -69,6 +94,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msgf("Failed to parse ENABLE_UNSAFE")
 	}
+	metricsPort := getEnv("METRICS_PORT", "8081")
 	port := getEnv("PORT", "8080")
 	secret := getEnv("SECRET", "")
 	if !enableUnsafe {
@@ -87,6 +113,7 @@ func main() {
 
 	server := NewServer(ServerConfig{
 		Port:         port,
+		MetricsPort:  metricsPort,
 		BaseURL:      baseURL,
 		Secret:       secret,
 		EnableUnsafe: enableUnsafe,
@@ -107,6 +134,7 @@ func main() {
 
 type ServerConfig struct {
 	Port         string
+	MetricsPort  string
 	BaseURL      string
 	Secret       string
 	EnableUnsafe bool
@@ -115,32 +143,82 @@ type ServerConfig struct {
 }
 
 type server struct {
-	mediaProcessor *MediaProcessor
-	config         ServerConfig
-	srv            *http.Server
+	mediaProcessor     *MediaProcessor
+	config             ServerConfig
+	srv                *http.Server
+	maxConnectionCount int
 }
 
 func NewServer(config ServerConfig, mediaProcessor *MediaProcessor) *server {
 	mux := chi.NewRouter()
 	srv := &http.Server{
-		Addr:    ":" + config.Port,
-		Handler: mux,
+		Addr:              ":" + config.Port,
+		Handler:           mux,
+		ReadTimeout:       5 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      20 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		ConnState: func(c net.Conn, cs http.ConnState) {
+			networkConns.WithLabelValues(cs.String()).Inc()
+			switch cs {
+			case http.StateNew:
+				activeConns.Add(1)
+			case http.StateHijacked, http.StateClosed:
+				activeConns.Add(-1)
+			}
+		},
 	}
 	s := &server{
-		config:         config,
-		mediaProcessor: mediaProcessor,
-		srv:            srv,
+		config:             config,
+		mediaProcessor:     mediaProcessor,
+		srv:                srv,
+		maxConnectionCount: 5,
 	}
+	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/*", s.handleRequest)
 	return s
 }
 
+type statusWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.statusCode = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (s *server) prometheusMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		activeRequests.Inc()
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		duration := time.Since(start)
+		durationMs := float64(duration) / float64(time.Millisecond)
+		routePattern := chi.RouteContext(r.Context()).RoutePattern()
+		requestDuration.WithLabelValues(r.Method, routePattern, strconv.Itoa(sw.statusCode)).Observe(durationMs / 1000)
+		activeRequests.Dec()
+	})
+}
+
 func (s *server) Start() {
 	go func() {
-		log.Printf("Server listening on port %s", s.srv.Addr)
-		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		l, err := net.Listen("tcp", s.srv.Addr)
+		if err != nil {
 			log.Fatal().Err(err).Msg("")
 		}
+		defer l.Close()
+		l = netutil.LimitListener(l, s.maxConnectionCount)
+
+		log.Printf("Server listening on port %s", s.srv.Addr)
+		if err := s.srv.Serve(l); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("")
+		}
+	}()
+	go func() {
+		http.ListenAndServe(":"+s.config.MetricsPort, promhttp.Handler())
 	}()
 }
 
@@ -185,6 +263,8 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 		log.Error().Err(err).Msg("Failed to parse query")
 		return
 	}
+
+	log.Debug().Str("method", r.Method).Stringer("url", r.URL).Any("opts", requestParams).Msg("Incoming Request")
 
 	if requestParams.OutputFormat == "" {
 		contentType := http.DetectContentType(imageBytes)
@@ -288,6 +368,26 @@ func parseQuery(query url.Values) (*RequestParams, error) {
 			return nil, fmt.Errorf("invalid resize.height parameter: %s", height)
 		}
 		resizeOpts.Height = heightInt
+	}
+	switch interesting := query.Get("resize.interesting"); interesting {
+	case "none", "":
+		resizeOpts.Interesting = vips.InterestingNone
+	case "centre":
+		resizeOpts.Interesting = vips.InterestingCentre
+	case "entropy":
+		resizeOpts.Interesting = vips.InterestingEntropy
+	case "attention":
+		resizeOpts.Interesting = vips.InterestingAttention
+	case "low":
+		resizeOpts.Interesting = vips.InterestingLow
+	case "high":
+		resizeOpts.Interesting = vips.InterestingHigh
+	case "all":
+		resizeOpts.Interesting = vips.InterestingAll
+	case "last":
+		resizeOpts.Interesting = vips.InterestingLast
+	default:
+		return nil, fmt.Errorf("invalid resize.interesting parameter: %s", interesting)
 	}
 	// resizeMethod := query.Get("resize.method") // fill or fit
 	// if resizeMethod != "" {

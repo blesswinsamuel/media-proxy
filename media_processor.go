@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 
 	"github.com/bbrks/go-blurhash"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/galdor/go-thumbhash"
+	"github.com/rs/zerolog/log"
 )
 
 type MetadataOptions struct {
@@ -26,8 +26,9 @@ type MetadataOptions struct {
 }
 
 type TransformOptionsResize struct {
-	Width  int
-	Height int
+	Width       int
+	Height      int
+	Interesting vips.Interesting
 	// Method  string // fill or fit
 	// Gravity string // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
 }
@@ -50,7 +51,7 @@ type MediaProcessor struct {
 }
 
 func (mp *MediaProcessor) fetchMediaFromUpstream(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
-	log.Printf("Fetching image from %s", upstreamURL.String())
+	log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
 
 	httpClient := http.DefaultClient
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
@@ -92,7 +93,7 @@ func (mp *MediaProcessor) fetchMedia(ctx context.Context, upstreamURL *url.URL) 
 	if cachedImage, err := mp.fetchCachedMedia(ctx, cacheKey); err != nil {
 		return nil, fmt.Errorf("failed to fetch cached image: %w", err)
 	} else if cachedImage != nil {
-		log.Printf("Image %s exists in cache %s", upstreamURL.String(), cacheKey)
+		log.Debug().Msgf("Image %s exists in cache %s", upstreamURL.String(), cacheKey)
 		return cachedImage, nil
 	}
 	img, err := mp.fetchMediaFromUpstream(ctx, upstreamURL)
@@ -121,7 +122,7 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 		importParams.Density.Set(params.TransformOptions.Dpi)
 	}
 	if params.TransformOptions.PageNo > 0 {
-		importParams.Page.Set(params.TransformOptions.PageNo)
+		importParams.Page.Set(params.TransformOptions.PageNo - 1)
 	}
 	if params.TransformOptions.Raw {
 		return imageBytes, getContentType(imageBytes), nil
@@ -153,7 +154,7 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 		// default:
 		// 	return nil, "", fmt.Errorf("invalid resize method: %s", resize.Method)
 		// }
-		err = image.Thumbnail(width, height, vips.InterestingAttention)
+		err = image.Thumbnail(width, height, resize.Interesting)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to resize image: %v", err)
 		}
