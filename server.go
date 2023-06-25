@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gorilla/schema"
+
 	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/go-chi/chi/v5"
@@ -171,10 +173,11 @@ func NewServer(config ServerConfig, mediaProcessor *MediaProcessor) *server {
 		config:             config,
 		mediaProcessor:     mediaProcessor,
 		srv:                srv,
-		maxConnectionCount: 5,
+		maxConnectionCount: 8,
 	}
 	mux.Use(s.prometheusMiddleware)
-	mux.HandleFunc("/{signature}/*", s.handleRequest)
+	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
+	mux.HandleFunc("/{signature}/media/*", s.handleMediaRequest)
 	return s
 }
 
@@ -194,10 +197,8 @@ func (s *server) prometheusMiddleware(next http.Handler) http.Handler {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(sw, r)
-		duration := time.Since(start)
-		durationMs := float64(duration) / float64(time.Millisecond)
 		routePattern := chi.RouteContext(r.Context()).RoutePattern()
-		requestDuration.WithLabelValues(r.Method, routePattern, strconv.Itoa(sw.statusCode)).Observe(durationMs / 1000)
+		requestDuration.WithLabelValues(r.Method, routePattern, strconv.Itoa(sw.statusCode)).Observe(time.Since(start).Seconds())
 		activeRequests.Dec()
 	})
 }
@@ -227,46 +228,103 @@ func (s *server) Stop() {
 	s.srv.Shutdown(ctx)
 }
 
-func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
+type HTTPError struct {
+	Code           int
+	Message        string
+	OrigError      error
+	AdditionalInfo any
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("%d: %s: %s", e.Code, e.Message, e.OrigError)
+}
+
+func NewHTTPError(code int, message string, err error) *HTTPError {
+	return &HTTPError{
+		Code:      code,
+		Message:   message,
+		OrigError: err,
+	}
+}
+
+type RequestInfo[T any] struct {
+	Signature     string
+	MediaPath     string
+	UpstreamURL   *url.URL
+	RequestParams *T
+	ImageBytes    []byte
+}
+
+func getRequestInfo[T any](s *server, r *http.Request, requestType string, parseQuery func(query url.Values) (*T, error)) (*RequestInfo[T], error) {
 	signature := chi.URLParam(r, "signature")
 	mediaPath := chi.URLParam(r, "*")
 
 	if !s.config.EnableUnsafe {
-		mp := mediaPath
+		mp := requestType + "/" + mediaPath
 		if r.URL.RawQuery != "" {
 			mp = mp + "?" + r.URL.RawQuery
 		}
 		if !s.validateSignature(signature, mp) {
-			http.Error(w, "Invalid signature", http.StatusForbidden)
-			return
+			return nil, NewHTTPError(http.StatusForbidden, "Invalid signature", nil)
 		}
 	}
 
+	mediaPath = strings.TrimSuffix(mediaPath, "/")
+
 	upstreamURL, err := url.Parse(fmt.Sprintf("%s%s", s.config.BaseURL, mediaPath))
 	if err != nil {
-		http.Error(w, "Failed to parse upstream URL", http.StatusInternalServerError)
-		log.Error().Err(err).Msg("Failed to parse upstream URL")
-		return
-	}
-
-	// Perform the request to the target server
-	imageBytes, err := s.mediaProcessor.fetchMedia(r.Context(), upstreamURL)
-	if err != nil {
-		http.Error(w, "Failed to fetch image", http.StatusInternalServerError)
-		log.Error().Err(err).Msg("Failed to fetch image")
-		return
+		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to parse upstream URL", err)
 	}
 
 	requestParams, err := parseQuery(r.URL.Query())
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to parse query")
-		return
+		return nil, NewHTTPError(http.StatusBadRequest, "Failed to parse query", err)
 	}
-
 	log.Debug().Str("method", r.Method).Stringer("url", r.URL).Any("opts", requestParams).Msg("Incoming Request")
 
-	if requestParams.OutputFormat == "" {
-		contentType := http.DetectContentType(imageBytes)
+	// Perform the request to the target server
+	imageBytes, err := s.mediaProcessor.fetchMedia(r.Context(), upstreamURL)
+	if err != nil {
+		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to fetch image", err)
+	}
+
+	return &RequestInfo[T]{
+		Signature:     signature,
+		MediaPath:     mediaPath,
+		UpstreamURL:   upstreamURL,
+		ImageBytes:    imageBytes,
+		RequestParams: requestParams,
+	}, nil
+}
+
+func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
+	info, err := getRequestInfo(s, r, "metadata", parseMetadataQuery)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get request info")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	params := info.RequestParams
+	out, contentType, err := s.mediaProcessor.processMetadataRequest(info.ImageBytes, params)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to process metadata request")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Write(out)
+}
+
+func (s *server) handleMediaRequest(w http.ResponseWriter, r *http.Request) {
+	info, err := getRequestInfo(s, r, "media", parseTransformQuery)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to get request info")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	params := info.RequestParams
+	if params.OutputFormat == "" {
+		contentType := http.DetectContentType(info.ImageBytes)
 		acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
 		if len(acceptedContentTypes) > 0 {
 			for _, acceptedContentType := range acceptedContentTypes {
@@ -280,37 +338,31 @@ func (s *server) handleRequest(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		switch contentType {
-		case "image/jpeg":
-			requestParams.OutputFormat = "jpeg"
-		case "image/png":
-			requestParams.OutputFormat = "png"
-		case "image/avif":
-			requestParams.OutputFormat = "avif"
 		case "image/webp":
-			requestParams.OutputFormat = "webp"
+			params.OutputFormat = "webp"
+		case "image/jpeg":
+			params.OutputFormat = "jpeg"
+		case "image/png":
+			params.OutputFormat = "png"
+		case "image/avif":
+			params.OutputFormat = "avif"
 		case "image/apng":
-			requestParams.OutputFormat = "apng"
+			params.OutputFormat = "apng"
 		default:
-			requestParams.OutputFormat = "png"
+			params.OutputFormat = "png"
 		}
 	}
 
-	// contentType := resp.Header.Get("Content-Type")
-	// fmt.Println(contentType)
-	// if strings.HasPrefix(contentType, "image/") {
-	// Transform the image using libvips
-	bytes, contentType, err := s.mediaProcessor.processRequest(imageBytes, *requestParams)
+	out, contentType, err := s.mediaProcessor.processTransformRequest(info.ImageBytes, params)
 	if err != nil {
-		http.Error(w, "Image transformation failed", http.StatusInternalServerError)
-		log.Error().Err(err).Msg("Image transformation failed")
+		log.Error().Err(err).Msg("Failed to process metadata request")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("Content-Length", strconv.Itoa(len(bytes)))
-	w.Write(bytes)
-	// }
-	// http.Error(w, "invalid content type", http.StatusInternalServerError)
+	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
+	w.Write(out)
 }
 
 func (s *server) validateSignature(signature string, imagePath string) bool {
@@ -322,113 +374,22 @@ func (s *server) validateSignature(signature string, imagePath string) bool {
 	return expectedHash == signature
 }
 
-func parseQuery(query url.Values) (*RequestParams, error) {
-	requestOptions := &RequestParams{}
+func parseMetadataQuery(query url.Values) (*MetadataOptions, error) {
+	metadataOpts := &MetadataOptions{}
+	var decoder = schema.NewDecoder()
+	decoder.SetAliasTag("query")
+	if err := decoder.Decode(metadataOpts, query); err != nil {
+		return nil, err
+	}
+	return metadataOpts, nil
+}
 
-	// metadata request
-	if metadata := query.Get("metadata"); metadata != "" {
-		metadata, err := strconv.ParseBool(metadata)
-		if err != nil {
-			return nil, fmt.Errorf("invalid metadata parameter: %q", query.Get("metadata"))
-		}
-		metadataOptions := &MetadataOptions{}
-		if thumbhash := query.Get("metadata.thumbhash"); thumbhash != "" {
-			thumbhash, err := strconv.ParseBool(thumbhash)
-			if err != nil {
-				return nil, fmt.Errorf("invalid thumbhash parameter: %q", query.Get("thumbhash"))
-			}
-			metadataOptions.ThumbHash = thumbhash
-		}
-		if blurhash := query.Get("metadata.blurhash"); blurhash != "" {
-			blurhash, err := strconv.ParseBool(blurhash)
-			if err != nil {
-				return nil, fmt.Errorf("invalid blurhash parameter: %q", query.Get("blurhash"))
-			}
-			metadataOptions.BlurHash = blurhash
-		}
-		if metadata {
-			requestOptions.MetadataOptions = metadataOptions
-		}
+func parseTransformQuery(query url.Values) (*TransformOptions, error) {
+	transformOpts := &TransformOptions{}
+	var decoder = schema.NewDecoder()
+	decoder.SetAliasTag("query")
+	if err := decoder.Decode(transformOpts, query); err != nil {
+		return nil, err
 	}
-
-	// transform request
-	transformRequest := TransformOptions{}
-	var resizeOpts TransformOptionsResize
-	if width := query.Get("resize.width"); width != "" {
-		widthInt, err := strconv.Atoi(width)
-		if err != nil {
-			return nil, fmt.Errorf("invalid resize.width parameter: %s", width)
-		}
-		resizeOpts.Width = widthInt
-	}
-	if height := query.Get("resize.height"); height != "" {
-		heightInt, err := strconv.Atoi(height)
-		if err != nil {
-			return nil, fmt.Errorf("invalid resize.height parameter: %s", height)
-		}
-		resizeOpts.Height = heightInt
-	}
-	switch interesting := query.Get("resize.interesting"); interesting {
-	case "none", "":
-		resizeOpts.Interesting = vips.InterestingNone
-	case "centre":
-		resizeOpts.Interesting = vips.InterestingCentre
-	case "entropy":
-		resizeOpts.Interesting = vips.InterestingEntropy
-	case "attention":
-		resizeOpts.Interesting = vips.InterestingAttention
-	case "low":
-		resizeOpts.Interesting = vips.InterestingLow
-	case "high":
-		resizeOpts.Interesting = vips.InterestingHigh
-	case "all":
-		resizeOpts.Interesting = vips.InterestingAll
-	case "last":
-		resizeOpts.Interesting = vips.InterestingLast
-	default:
-		return nil, fmt.Errorf("invalid resize.interesting parameter: %s", interesting)
-	}
-	// resizeMethod := query.Get("resize.method") // fill or fit
-	// if resizeMethod != "" {
-	// 	resizeOpts.Method = resizeMethod
-	// } else {
-	// 	resizeOpts.Method = "fill"
-	// }
-	// resizeGravity := query.Get("resize.gravity") // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
-	// if resizeGravity != "" {
-	// 	resizeOpts.Gravity = resizeGravity
-	// } else {
-	// 	resizeOpts.Gravity = "smart"
-	// }
-	if resizeOpts.Width != 0 || resizeOpts.Height != 0 {
-		transformRequest.Resize = &resizeOpts
-	}
-	dpi := query.Get("dpi")
-	if dpi != "" {
-		dpiInt, err := strconv.Atoi(dpi)
-		if err != nil {
-			return nil, fmt.Errorf("invalid dpi parameter: %s", dpi)
-		}
-		transformRequest.Dpi = dpiInt
-	}
-	raw := query.Get("raw")
-	if raw != "" {
-		rawBool, err := strconv.ParseBool(raw)
-		if err != nil {
-			return nil, fmt.Errorf("invalid raw parameter: %s", dpi)
-		}
-		transformRequest.Raw = rawBool
-	}
-
-	pageNo := query.Get("page")
-	if pageNo != "" {
-		pageNoInt, err := strconv.Atoi(pageNo)
-		if err != nil {
-			return nil, fmt.Errorf("invalid pageNo parameter: %s", pageNo)
-		}
-		transformRequest.PageNo = pageNoInt
-	}
-	requestOptions.TransformOptions = transformRequest
-
-	return requestOptions, nil
+	return transformOpts, nil
 }

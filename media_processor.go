@@ -19,32 +19,32 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type ReadOptions struct {
+	Dpi  int `query:"dpi"`
+	Page int `query:"page"`
+}
+
 type MetadataOptions struct {
+	Read ReadOptions `query:"read"`
 	// https://evanw.github.io/thumbhash/
-	ThumbHash bool
+	ThumbHash bool `query:"thumbhash"`
 	// https://github.com/woltapp/blurhash
-	BlurHash bool
+	BlurHash bool `query:"blurhash"`
 }
 
 type TransformOptionsResize struct {
-	Width       int
-	Height      int
-	Interesting vips.Interesting
+	Width       int    `query:"width"`
+	Height      int    `query:"height"`
+	Interesting string `query:"interesting"`
 	// Method  string // fill or fit
 	// Gravity string // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
 }
 
 type TransformOptions struct {
-	Resize *TransformOptionsResize
-	Dpi    int
-	PageNo int
-	Raw    bool
-}
-
-type RequestParams struct {
-	MetadataOptions  *MetadataOptions
-	TransformOptions TransformOptions
-	OutputFormat     string
+	Raw          bool                    `query:"raw"`
+	Read         ReadOptions             `query:"read"`
+	Resize       *TransformOptionsResize `query:"resize"`
+	OutputFormat string                  `query:"outputFormat"`
 }
 
 type MediaProcessor struct {
@@ -96,16 +96,39 @@ func getContentType(imageBytes []byte) string {
 	return contentType
 }
 
-func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams) ([]byte, string, error) {
+func parseVipsInteresting(interesting string) (vips.Interesting, error) {
+	switch interesting {
+	case "none", "":
+		return vips.InterestingNone, nil
+	case "centre":
+		return vips.InterestingCentre, nil
+	case "entropy":
+		return vips.InterestingEntropy, nil
+	case "attention":
+		return vips.InterestingAttention, nil
+	case "low":
+		return vips.InterestingLow, nil
+	case "high":
+		return vips.InterestingHigh, nil
+	case "all":
+		return vips.InterestingAll, nil
+	case "last":
+		return vips.InterestingLast, nil
+	default:
+		return 0, fmt.Errorf("invalid interesting parameter: %s", interesting)
+	}
+}
+
+func (mp *MediaProcessor) processTransformRequest(imageBytes []byte, params *TransformOptions) ([]byte, string, error) {
 	// Load the image using libvips
 	importParams := vips.NewImportParams()
-	if params.TransformOptions.Dpi > 0 {
-		importParams.Density.Set(params.TransformOptions.Dpi)
+	if params.Read.Dpi > 0 {
+		importParams.Density.Set(params.Read.Dpi)
 	}
-	if params.TransformOptions.PageNo > 0 {
-		importParams.Page.Set(params.TransformOptions.PageNo - 1)
+	if params.Read.Page > 0 {
+		importParams.Page.Set(params.Read.Page - 1)
 	}
-	if params.TransformOptions.Raw {
+	if params.Raw {
 		return imageBytes, getContentType(imageBytes), nil
 	}
 
@@ -116,7 +139,7 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 	defer image.Close()
 
 	// height := image.Height() * width / image.Width()
-	if resize := params.TransformOptions.Resize; resize != nil {
+	if resize := params.Resize; resize != nil {
 		width := resize.Width
 		height := resize.Height
 		if width == 0 {
@@ -135,14 +158,14 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 		// default:
 		// 	return nil, "", fmt.Errorf("invalid resize method: %s", resize.Method)
 		// }
-		err = image.Thumbnail(width, height, resize.Interesting)
+		interesting, err := parseVipsInteresting(resize.Interesting)
+		if err != nil {
+			return nil, "", fmt.Errorf("invalid interesting parameter: %s", resize.Interesting)
+		}
+		err = image.Thumbnail(width, height, interesting)
 		if err != nil {
 			return nil, "", fmt.Errorf("failed to resize image: %v", err)
 		}
-	}
-
-	if params.MetadataOptions != nil {
-		return mp.processMetadataRequest(image, params.MetadataOptions)
 	}
 
 	switch params.OutputFormat {
@@ -167,7 +190,21 @@ func (mp *MediaProcessor) processRequest(imageBytes []byte, params RequestParams
 	}
 }
 
-func (mp *MediaProcessor) processMetadataRequest(img *vips.ImageRef, params *MetadataOptions) ([]byte, string, error) {
+func (mp *MediaProcessor) processMetadataRequest(imageBytes []byte, params *MetadataOptions) ([]byte, string, error) {
+	importParams := vips.NewImportParams()
+	if params.Read.Dpi > 0 {
+		importParams.Density.Set(params.Read.Dpi)
+	}
+	if params.Read.Page > 0 {
+		importParams.Page.Set(params.Read.Page - 1)
+	}
+
+	img, err := vips.LoadImageFromBuffer(imageBytes, importParams)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to load image: %v", err)
+	}
+	defer img.Close()
+
 	type MetadataResponse struct {
 		Width     int    `json:"width"`
 		Height    int    `json:"height"`
@@ -200,9 +237,6 @@ func (mp *MediaProcessor) processMetadataRequest(img *vips.ImageRef, params *Met
 		metadata.Blurhash = hash
 	}
 	if params.ThumbHash {
-		// ep := vips.NewJpegExportParams()
-		// ep.Quality = 10
-		// outputBytes, _, err := img.ExportJpeg(ep)
 		ep := vips.NewPngExportParams()
 		ep.Quality = 10
 		outputBytes, _, err := img.ExportPng(ep)

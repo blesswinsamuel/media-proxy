@@ -9,14 +9,15 @@ tasks:
 
   open-file:
     cmds:
-      - open "http://localhost:8080/{{ .HASH }}/{{ .PATH }}"
+      - open "http://localhost:8080/{{ .HASH }}/{{ .TYPE }}/{{ .PATH }}"
     vars:
-      SECRET: 87qxbryf7q3ghncfqw7eohqwe7fhcnoaweihno
-      PATH: "{{ .CLI_ARGS | splitArgs | first }}"
+      SECRET: mylocalsecret
+      TYPE: "{{ .CLI_ARGS | splitArgs | first }}"
+      PATH: "{{ index (.CLI_ARGS | splitArgs) 1 }}"
       HASH_SCRIPT: |
         const crypto = require('crypto')
         const secret = "{{ .SECRET }}"
-        const path = "{{ .PATH }}"
+        const path = "{{ .TYPE }}/{{ .PATH }}"
         const hash = crypto.createHmac('sha1', secret)
           .update(path)
           .digest('base64')
