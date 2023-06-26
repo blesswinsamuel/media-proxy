@@ -14,18 +14,19 @@ type Cache interface {
 }
 
 func GetCachedOrFetch(cache Cache, key string, fetch func() ([]byte, error)) ([]byte, error) {
-	if cachedImage, err := cache.Get(key); err != nil {
+	keyHashed := Sha256Hash(key)
+	if cachedImage, err := cache.Get(keyHashed); err != nil {
 		return nil, fmt.Errorf("failed to fetch from cache: %w", err)
 	} else if cachedImage != nil {
-		log.Debug().Msgf("Cache hit for %s", key)
+		log.Debug().Str("key", key).Str("keyHashed", keyHashed).Msgf("Cache hit")
 		return cachedImage, nil
 	}
-	log.Debug().Msgf("Cache miss for %s", key)
+	log.Debug().Str("key", key).Str("keyHashed", keyHashed).Msgf("Cache miss")
 	img, err := fetch()
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch from upstream: %w", err)
 	}
-	if err := cache.Put(key, img); err != nil {
+	if err := cache.Put(keyHashed, img); err != nil {
 		return nil, fmt.Errorf("failed to put to cache: %w", err)
 	}
 	return img, nil

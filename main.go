@@ -51,7 +51,7 @@ func main() {
 	if baseURL != "" {
 		baseURL = baseURL + "/"
 	}
-	cachePath := getEnv("CACHE_PATH", "/tmp/cache")
+	cachePath := getEnv("CACHE_DIR", "/tmp/cache")
 	enableUnsafe, err := strconv.ParseBool(getEnv("ENABLE_UNSAFE", "false"))
 	if err != nil {
 		log.Fatal().Err(err).Msgf("Failed to parse ENABLE_UNSAFE")
@@ -63,6 +63,10 @@ func main() {
 		if secret == "" {
 			log.Fatal().Msg("SECRET must be set when ENABLE_UNSAFE=false")
 		}
+	}
+	concurrency, err := strconv.Atoi(getEnv("CONCURRENCY", "8"))
+	if err != nil {
+		log.Fatal().Err(err).Msgf("Failed to parse CONCURRENCY")
 	}
 
 	loaderCache := cache.NewFsCache(cachePath + "/original")
@@ -78,6 +82,7 @@ func main() {
 		EnableUnsafe: enableUnsafe,
 		AutoAvif:     true,
 		AutoWebp:     true,
+		Concurrency:  concurrency,
 	}, mediaProcessor, loader, metadataCache)
 
 	// Start the server

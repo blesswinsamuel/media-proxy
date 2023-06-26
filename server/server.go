@@ -53,6 +53,7 @@ type ServerConfig struct {
 	EnableUnsafe bool
 	AutoAvif     bool
 	AutoWebp     bool
+	Concurrency  int
 }
 
 type server struct {
@@ -77,9 +78,9 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 			networkConns.WithLabelValues(cs.String()).Inc()
 			switch cs {
 			case http.StateNew:
-				activeConns.Add(1)
+				activeConns.Inc()
 			case http.StateHijacked, http.StateClosed:
-				activeConns.Add(-1)
+				activeConns.Dec()
 			}
 		},
 	}
@@ -88,7 +89,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		mediaProcessor:     mediaProcessor,
 		loader:             loader,
 		srv:                srv,
-		maxConnectionCount: 8,
+		maxConnectionCount: config.Concurrency,
 		metadataCache:      metadataCache,
 	}
 	mux.Use(s.prometheusMiddleware)
@@ -214,8 +215,7 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := info.RequestParams
-	cacheKey := cache.Sha256Hash(info.Signature + info.MediaPath)
-	out, err := cache.GetCachedOrFetch(s.metadataCache, cacheKey, func() ([]byte, error) {
+	out, err := cache.GetCachedOrFetch(s.metadataCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
 		out, contentType, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
 		if err != nil {
 			return nil, err

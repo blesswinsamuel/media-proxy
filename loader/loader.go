@@ -54,41 +54,36 @@ func (l *HTTPLoader) GetMedia(ctx context.Context, mediaPath string) ([]byte, er
 		return nil, fmt.Errorf("failed to parse upstream URL: %w", err)
 	}
 
-	cacheKey := cache.Sha256Hash(upstreamURL.String())
-	return cache.GetCachedOrFetch(l.cache, cacheKey, func() ([]byte, error) {
-		return l.fetchMediaFromUpstream(ctx, upstreamURL)
-	})
-}
+	return cache.GetCachedOrFetch(l.cache, upstreamURL.String(), func() ([]byte, error) {
+		startTime := time.Now()
+		statusCode := 0
+		defer func() {
+			loaderDuration.WithLabelValues(fmt.Sprintf("%d", statusCode)).Observe(time.Since(startTime).Seconds())
+		}()
+		log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
 
-func (l *HTTPLoader) fetchMediaFromUpstream(ctx context.Context, upstreamURL *url.URL) ([]byte, error) {
-	startTime := time.Now()
-	statusCode := 0
-	defer func() {
-		loaderDuration.WithLabelValues(fmt.Sprintf("%d", statusCode)).Observe(time.Since(startTime).Seconds())
-	}()
-	log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch image: %w", err)
-	}
-	defer resp.Body.Close()
-	statusCode = resp.StatusCode
-	if resp.StatusCode != http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
 		if err != nil {
-			body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-		return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
-	}
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-	loaderResponseSize.Observe(float64(len(bodyBytes)))
-	return bodyBytes, nil
+		resp, err := l.client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch image: %w", err)
+		}
+		defer resp.Body.Close()
+		statusCode = resp.StatusCode
+		if resp.StatusCode != http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
+			}
+			return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
+		}
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read response body: %w", err)
+		}
+		loaderResponseSize.Observe(float64(len(bodyBytes)))
+		return bodyBytes, nil
+	})
 }
