@@ -19,11 +19,11 @@ import (
 	"github.com/gorilla/schema"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
-	"golang.org/x/net/netutil"
 )
 
 var (
@@ -92,6 +92,11 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		maxConnectionCount: config.Concurrency,
 		metadataCache:      metadataCache,
 	}
+	mux.Use(middleware.ThrottleWithOpts(middleware.ThrottleOpts{
+		Limit:          s.maxConnectionCount,
+		BacklogLimit:   200,
+		BacklogTimeout: 60 * time.Second,
+	}))
 	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
 	mux.HandleFunc("/{signature}/media/*", s.handleMediaRequest)
@@ -122,15 +127,8 @@ func (s *server) prometheusMiddleware(next http.Handler) http.Handler {
 
 func (s *server) Start() {
 	go func() {
-		l, err := net.Listen("tcp", s.srv.Addr)
-		if err != nil {
-			log.Fatal().Err(err).Msg("")
-		}
-		defer l.Close()
-		l = netutil.LimitListener(l, s.maxConnectionCount)
-
 		log.Printf("Server listening on port %s", s.srv.Addr)
-		if err := s.srv.Serve(l); err != nil && err != http.ErrServerClosed {
+		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("")
 		}
 	}()

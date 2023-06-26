@@ -10,7 +10,6 @@ require (
 	github.com/gorilla/schema v1.2.0
 	github.com/prometheus/client_golang v1.16.0
 	github.com/rs/zerolog v1.29.1
-	golang.org/x/net v0.11.0
 )
 
 require (
@@ -24,6 +23,7 @@ require (
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
 	golang.org/x/image v0.8.0 // indirect
+	golang.org/x/net v0.11.0 // indirect
 	golang.org/x/sys v0.9.0 // indirect
 	golang.org/x/text v0.10.0 // indirect
 	google.golang.org/protobuf v1.30.0 // indirect
