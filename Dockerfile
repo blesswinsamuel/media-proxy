@@ -31,7 +31,7 @@ RUN if [ "${TARGETARCH}" = "arm64" ] ; then \
 
 FROM alpine:latest
 
-RUN apk add --no-cache gcompat vips
+RUN apk add --no-cache gcompat vips vips-poppler
 
 COPY --from=builder /app/media-proxy /go/bin/media-proxy
 
