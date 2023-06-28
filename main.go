@@ -71,9 +71,10 @@ func main() {
 
 	loaderCache := cache.NewFsCache(cachePath + "/original")
 	metadataCache := cache.NewFsCache(cachePath + "/metadata")
+	resultCache := cache.NewFsCache(cachePath + "/result")
 
 	mediaProcessor := mediaprocessor.NewMediaProcessor()
-	loader := loader.NewHTTPLoader(baseURL, loaderCache)
+	loader := loader.NewHTTPLoader(baseURL)
 
 	server := server.NewServer(server.ServerConfig{
 		Port:         port,
@@ -83,7 +84,7 @@ func main() {
 		AutoAvif:     true,
 		AutoWebp:     true,
 		Concurrency:  concurrency,
-	}, mediaProcessor, loader, metadataCache)
+	}, mediaProcessor, loader, loaderCache, metadataCache, resultCache)
 
 	// Start the server
 	server.Start()

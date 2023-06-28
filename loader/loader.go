@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/blesswinsamuel/media-proxy/cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/rs/zerolog/log"
@@ -33,14 +32,12 @@ type Loader interface {
 
 type HTTPLoader struct {
 	baseURL string
-	cache   cache.Cache
 	client  *http.Client
 }
 
-func NewHTTPLoader(baseURL string, cache cache.Cache) *HTTPLoader {
+func NewHTTPLoader(baseURL string) *HTTPLoader {
 	return &HTTPLoader{
 		baseURL: baseURL,
-		cache:   cache,
 		client: &http.Client{
 			Timeout:   20 * time.Second,
 			Transport: &http.Transport{},
@@ -54,36 +51,34 @@ func (l *HTTPLoader) GetMedia(ctx context.Context, mediaPath string) ([]byte, er
 		return nil, fmt.Errorf("failed to parse upstream URL: %w", err)
 	}
 
-	return cache.GetCachedOrFetch(l.cache, upstreamURL.String(), func() ([]byte, error) {
-		startTime := time.Now()
-		statusCode := 0
-		defer func() {
-			loaderDuration.WithLabelValues(fmt.Sprintf("%d", statusCode)).Observe(time.Since(startTime).Seconds())
-		}()
-		log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
+	startTime := time.Now()
+	statusCode := 0
+	defer func() {
+		loaderDuration.WithLabelValues(fmt.Sprintf("%d", statusCode)).Observe(time.Since(startTime).Seconds())
+	}()
+	log.Debug().Msgf("Fetching image from %s", upstreamURL.String())
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch image: %w", err)
+	}
+	defer resp.Body.Close()
+	statusCode = resp.StatusCode
+	if resp.StatusCode != http.StatusOK {
+		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create request: %w", err)
+			body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
 		}
-		resp, err := l.client.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch image: %w", err)
-		}
-		defer resp.Body.Close()
-		statusCode = resp.StatusCode
-		if resp.StatusCode != http.StatusOK {
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
-			}
-			return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
-		}
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read response body: %w", err)
-		}
-		loaderResponseSize.Observe(float64(len(bodyBytes)))
-		return bodyBytes, nil
-	})
+		return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	loaderResponseSize.Observe(float64(len(bodyBytes)))
+	return bodyBytes, nil
 }

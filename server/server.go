@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"net/http"
@@ -62,10 +63,12 @@ type server struct {
 	config             ServerConfig
 	srv                *http.Server
 	maxConnectionCount int
+	loaderCache        cache.Cache
 	metadataCache      cache.Cache
+	resultCache        cache.Cache
 }
 
-func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, loader loader.Loader, metadataCache cache.Cache) *server {
+func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, loader loader.Loader, loaderCache cache.Cache, metadataCache cache.Cache, resultCache cache.Cache) *server {
 	mux := chi.NewRouter()
 	srv := &http.Server{
 		Addr:              ":" + config.Port,
@@ -90,7 +93,9 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		loader:             loader,
 		srv:                srv,
 		maxConnectionCount: config.Concurrency,
+		loaderCache:        loaderCache,
 		metadataCache:      metadataCache,
+		resultCache:        resultCache,
 	}
 	mux.Use(middleware.ThrottleWithOpts(middleware.ThrottleOpts{
 		Limit:          s.maxConnectionCount,
@@ -192,7 +197,9 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 	log.Debug().Str("method", r.Method).Stringer("url", r.URL).Any("opts", requestParams).Msg("Incoming Request")
 
 	// Perform the request to the target server
-	imageBytes, err := s.loader.GetMedia(r.Context(), mediaPath)
+	imageBytes, err := cache.GetCachedOrFetch(s.loaderCache, mediaPath, func() ([]byte, error) {
+		return s.loader.GetMedia(r.Context(), mediaPath)
+	})
 	if err != nil {
 		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to fetch image", err)
 	}
@@ -214,13 +221,13 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	params := info.RequestParams
 	out, err := cache.GetCachedOrFetch(s.metadataCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
-		out, contentType, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
+		out, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
 		if err != nil {
 			return nil, err
 		}
-		w.Header().Set("Content-Type", contentType)
 		return out, nil
 	})
+	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process metadata request")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -267,7 +274,14 @@ func (s *server) handleMediaRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out, contentType, err := s.mediaProcessor.ProcessTransformRequest(info.ImageBytes, params)
+	out, err := cache.GetCachedOrFetch(s.resultCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
+		out, contentType, err := s.mediaProcessor.ProcessTransformRequest(info.ImageBytes, params)
+		if err != nil {
+			return nil, err
+		}
+		return concatenateContentTypeAndData(contentType, out), nil
+	})
+	contentType, out := getContentTypeAndData(out)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process metadata request")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -277,6 +291,21 @@ func (s *server) handleMediaRequest(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
 	w.Write(out)
+}
+
+func concatenateContentTypeAndData(contentType string, data []byte) []byte {
+	sizeBytes := make([]byte, 4, 4+len(contentType)+len(data))
+	binary.LittleEndian.PutUint32(sizeBytes, uint32(len(contentType)))
+	concatenatedBytes := append(sizeBytes, contentType...)
+	concatenatedBytes = append(concatenatedBytes, data...)
+	return concatenatedBytes
+}
+
+func getContentTypeAndData(concatenatedBytes []byte) (string, []byte) {
+	size := binary.LittleEndian.Uint32(concatenatedBytes[:4])
+	contentType := string(concatenatedBytes[4 : 4+size])
+	data := concatenatedBytes[4+size:]
+	return contentType, data
 }
 
 func (s *server) validateSignature(signature string, imagePath string) bool {

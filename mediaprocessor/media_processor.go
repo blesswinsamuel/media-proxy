@@ -174,7 +174,17 @@ func (mp *MediaProcessor) ProcessTransformRequest(imageBytes []byte, params *Tra
 	}
 }
 
-func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *MetadataOptions) ([]byte, string, error) {
+type MetadataResponse struct {
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	NoOfPages  int    `json:"noOfPages"`
+	Format     string `json:"format"`
+	Blurhash   string `json:"blurhash,omitempty"`
+	Thumbhash  string `json:"thumbhash,omitempty"`
+	PotatoWebp string `json:"potatowebp,omitempty"`
+}
+
+func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *MetadataOptions) ([]byte, error) {
 	importParams := vips.NewImportParams()
 	if params.Read.Dpi > 0 {
 		importParams.Density.Set(params.Read.Dpi)
@@ -185,76 +195,61 @@ func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *Meta
 
 	img, err := vips.LoadImageFromBuffer(imageBytes, importParams)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to load image: %v", err)
+		return nil, fmt.Errorf("failed to load image: %v", err)
 	}
 	defer img.Close()
 
-	type MetadataResponse struct {
-		Width      int    `json:"width"`
-		Height     int    `json:"height"`
-		NoOfPages  int    `json:"noOfPages"`
-		Format     string `json:"format"`
-		Blurhash   string `json:"blurhash,omitempty"`
-		Thumbhash  string `json:"thumbhash,omitempty"`
-		PotatoWebp string `json:"potatowebp,omitempty"`
-	}
 	metadata := MetadataResponse{
 		Width:     img.Width(),
 		Height:    img.Height(),
 		NoOfPages: img.Pages(),
 		Format:    vips.ImageTypes[img.Format()],
 	}
-	if params.BlurHash {
+	if params.BlurHash || params.ThumbHash || params.PotatoWebp {
 		err := img.Resize(16.0/float64(img.Width()), vips.KernelNearest)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to resize image: %v", err)
+			return nil, fmt.Errorf("failed to resize image: %v", err)
 		}
+	}
+	if params.BlurHash {
 		ep := vips.NewDefaultJPEGExportParams()
 		ep.Quality = 10
 		outputBytes, _, err := img.Export(ep)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to export image: %v", err)
+			return nil, fmt.Errorf("failed to export image: %v", err)
 		}
 		gimg, _, err := image.Decode(bytes.NewReader(outputBytes))
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to decode image: %v", err)
+			return nil, fmt.Errorf("failed to decode image: %v", err)
 		}
 		hash, err := blurhash.Encode(5, 5, gimg)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to encode blurhash: %v", err)
+			return nil, fmt.Errorf("failed to encode blurhash: %v", err)
 		}
 		metadata.Blurhash = hash
 	}
 	if params.ThumbHash {
-		err := img.Resize(16.0/float64(img.Width()), vips.KernelNearest)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to resize image: %v", err)
-		}
 		ep := vips.NewPngExportParams()
 		ep.Quality = 5
 		ep.StripMetadata = true
 		outputBytes, _, err := img.ExportPng(ep)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to export image: %v", err)
+			return nil, fmt.Errorf("failed to export image: %v", err)
 		}
 		gimg, _, err := image.Decode(bytes.NewReader(outputBytes))
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to decode image: %v", err)
+			return nil, fmt.Errorf("failed to decode image: %v", err)
 		}
 		metadata.Thumbhash = base64.StdEncoding.EncodeToString(thumbhash.EncodeImage(gimg))
 		// fmt.Println(metadata.Thumbhash)
 	}
 	if params.PotatoWebp {
-		err := img.Resize(16.0/float64(img.Width()), vips.KernelNearest)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to resize image: %v", err)
-		}
 		ep := vips.NewWebpExportParams()
 		ep.Quality = 0
 		ep.StripMetadata = true
 		outputBytes, _, err := img.ExportWebp(ep)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to export image: %v", err)
+			return nil, fmt.Errorf("failed to export image: %v", err)
 		}
 		// "data:image/png;base64," +
 		metadata.PotatoWebp = base64.StdEncoding.EncodeToString(outputBytes)
@@ -263,7 +258,7 @@ func (mp *MediaProcessor) ProcessMetadataRequest(imageBytes []byte, params *Meta
 	}
 	res, err := json.Marshal(metadata)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to marshal metadata: %v", err)
+		return nil, fmt.Errorf("failed to marshal metadata: %v", err)
 	}
-	return res, "application/json", nil
+	return res, nil
 }

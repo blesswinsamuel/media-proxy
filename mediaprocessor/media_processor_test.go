@@ -37,7 +37,7 @@ func BenchmarkProcessMetadataRequest(b *testing.B) {
 	// Run the benchmark
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, err := mp.ProcessMetadataRequest(imageBytes, params)
+		_, err := mp.ProcessMetadataRequest(imageBytes, params)
 		if err != nil {
 			b.Fatalf("failed to process metadata: %v", err)
 		}
