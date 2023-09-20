@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/blesswinsamuel/media-proxy/cache"
-	"github.com/blesswinsamuel/media-proxy/loader"
-	"github.com/blesswinsamuel/media-proxy/mediaprocessor"
+	"github.com/blesswinsamuel/media-proxy/internal/cache"
+	"github.com/blesswinsamuel/media-proxy/internal/loader"
+	"github.com/blesswinsamuel/media-proxy/internal/mediaprocessor"
 	"github.com/gorilla/schema"
 
 	"github.com/go-chi/chi/v5"
@@ -102,6 +102,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		BacklogLimit:   200,
 		BacklogTimeout: 60 * time.Second,
 	}))
+	mux.Use(middleware.RequestID)
 	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
 	mux.HandleFunc("/{signature}/media/*", s.handleMediaRequest)
@@ -194,11 +195,13 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 	if err != nil {
 		return nil, NewHTTPError(http.StatusBadRequest, "Failed to parse query", err)
 	}
-	log.Debug().Str("method", r.Method).Stringer("url", r.URL).Any("opts", requestParams).Msg("Incoming Request")
+	logger := log.With().Str("method", r.Method).Stringer("url", r.URL).Logger()
+	ctx := logger.WithContext(r.Context())
+	logger.Debug().Interface("opts", requestParams).Msg("Incoming Request")
 
 	// Perform the request to the target server
 	imageBytes, err := cache.GetCachedOrFetch(s.loaderCache, mediaPath, func() ([]byte, error) {
-		return s.loader.GetMedia(r.Context(), mediaPath)
+		return s.loader.GetMedia(ctx, mediaPath)
 	})
 	if err != nil {
 		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to fetch image", err)

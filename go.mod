@@ -8,6 +8,8 @@ require (
 	github.com/galdor/go-thumbhash v1.0.0
 	github.com/go-chi/chi/v5 v5.0.8
 	github.com/gorilla/schema v1.2.0
+	github.com/jessevdk/go-flags v1.5.0
+	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.16.0
 	github.com/rs/zerolog v1.29.1
 )

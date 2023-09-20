@@ -18,7 +18,7 @@ func GetCachedOrFetch(cache Cache, key string, fetch func() ([]byte, error)) ([]
 	if cachedImage, err := cache.Get(keyHashed); err != nil {
 		return nil, fmt.Errorf("failed to fetch from cache: %w", err)
 	} else if cachedImage != nil {
-		log.Debug().Str("key", key).Str("keyHashed", keyHashed).Msgf("Cache hit")
+		log.Debug().Str("key", key).Str("keyHashed", keyHashed).Int("size", len(cachedImage)).Msgf("Cache hit")
 		return cachedImage, nil
 	}
 	log.Debug().Str("key", key).Str("keyHashed", keyHashed).Msgf("Cache miss")
