@@ -17,7 +17,6 @@ import (
 	"github.com/blesswinsamuel/media-proxy/internal/cache"
 	"github.com/blesswinsamuel/media-proxy/internal/loader"
 	"github.com/blesswinsamuel/media-proxy/internal/mediaprocessor"
-	"github.com/gorilla/schema"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -105,7 +104,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 	mux.Use(middleware.RequestID)
 	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
-	mux.HandleFunc("/{signature}/media/*", s.handleMediaRequest)
+	mux.HandleFunc("/{signature}/media/*", s.handleTransformRequest)
 	return s
 }
 
@@ -169,13 +168,14 @@ func NewHTTPError(code int, message string, err error) *HTTPError {
 }
 
 type RequestInfo[T any] struct {
-	Signature     string
-	MediaPath     string
-	RequestParams *T
-	ImageBytes    []byte
+	Signature        string
+	MediaPath        string
+	RequestParamsRaw url.Values
+	RequestParams    *T
 }
 
 func getRequestInfo[T any](s *server, r *http.Request, requestType string, parseQuery func(query url.Values) (*T, error)) (*RequestInfo[T], error) {
+	// validate signature
 	signature := chi.URLParam(r, "signature")
 	mediaPath := chi.URLParam(r, "*")
 
@@ -191,14 +191,21 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 
 	mediaPath = strings.TrimSuffix(mediaPath, "/")
 
+	// parse query
 	requestParams, err := parseQuery(r.URL.Query())
 	if err != nil {
 		return nil, NewHTTPError(http.StatusBadRequest, "Failed to parse query", err)
 	}
-	logger := log.With().Str("method", r.Method).Stringer("url", r.URL).Logger()
-	ctx := logger.WithContext(r.Context())
-	logger.Debug().Interface("opts", requestParams).Msg("Incoming Request")
 
+	return &RequestInfo[T]{
+		Signature:        signature,
+		MediaPath:        mediaPath,
+		RequestParams:    requestParams,
+		RequestParamsRaw: r.URL.Query(),
+	}, nil
+}
+
+func (s *server) getOriginalImage(ctx context.Context, mediaPath string) ([]byte, error) {
 	// Perform the request to the target server
 	imageBytes, err := cache.GetCachedOrFetch(s.loaderCache, mediaPath, func() ([]byte, error) {
 		return s.loader.GetMedia(ctx, mediaPath)
@@ -206,94 +213,7 @@ func getRequestInfo[T any](s *server, r *http.Request, requestType string, parse
 	if err != nil {
 		return nil, NewHTTPError(http.StatusInternalServerError, "Failed to fetch image", err)
 	}
-
-	return &RequestInfo[T]{
-		Signature:     signature,
-		MediaPath:     mediaPath,
-		ImageBytes:    imageBytes,
-		RequestParams: requestParams,
-	}, nil
-}
-
-func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
-	info, err := getRequestInfo(s, r, "metadata", parseMetadataQuery)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to get request info")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	params := info.RequestParams
-	out, err := cache.GetCachedOrFetch(s.metadataCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
-		out, err := s.mediaProcessor.ProcessMetadataRequest(info.ImageBytes, params)
-		if err != nil {
-			return nil, err
-		}
-		return out, nil
-	})
-	w.Header().Set("Content-Type", "application/json")
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to process metadata request")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Write(out)
-}
-
-func (s *server) handleMediaRequest(w http.ResponseWriter, r *http.Request) {
-	info, err := getRequestInfo(s, r, "media", parseTransformQuery)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to get request info")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	params := info.RequestParams
-	if params.OutputFormat == "" {
-		contentType := http.DetectContentType(info.ImageBytes)
-		acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
-		if len(acceptedContentTypes) > 0 {
-			for _, acceptedContentType := range acceptedContentTypes {
-				if acceptedContentType == "image/avif" {
-					continue
-				}
-				if strings.HasPrefix(acceptedContentType, "image/") {
-					contentType = strings.TrimSpace(acceptedContentType)
-					break
-				}
-			}
-		}
-		switch contentType {
-		case "image/webp":
-			params.OutputFormat = "webp"
-		case "image/jpeg":
-			params.OutputFormat = "jpeg"
-		case "image/png":
-			params.OutputFormat = "png"
-		case "image/avif":
-			params.OutputFormat = "avif"
-		case "image/apng":
-			params.OutputFormat = "apng"
-		default:
-			params.OutputFormat = "png"
-		}
-	}
-
-	out, err := cache.GetCachedOrFetch(s.resultCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
-		out, contentType, err := s.mediaProcessor.ProcessTransformRequest(info.ImageBytes, params)
-		if err != nil {
-			return nil, err
-		}
-		return concatenateContentTypeAndData(contentType, out), nil
-	})
-	contentType, out := getContentTypeAndData(out)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to process metadata request")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
-	w.Write(out)
+	return imageBytes, nil
 }
 
 func concatenateContentTypeAndData(contentType string, data []byte) []byte {
@@ -318,24 +238,4 @@ func (s *server) validateSignature(signature string, imagePath string) bool {
 	// expectedHash = expectedHash[:40]
 	// log.Debug().Msgf("expected hash (%s): %s", imagePath, expectedHash)
 	return expectedHash == signature
-}
-
-func parseMetadataQuery(query url.Values) (*mediaprocessor.MetadataOptions, error) {
-	metadataOpts := &mediaprocessor.MetadataOptions{}
-	var decoder = schema.NewDecoder()
-	decoder.SetAliasTag("query")
-	if err := decoder.Decode(metadataOpts, query); err != nil {
-		return nil, err
-	}
-	return metadataOpts, nil
-}
-
-func parseTransformQuery(query url.Values) (*mediaprocessor.TransformOptions, error) {
-	transformOpts := &mediaprocessor.TransformOptions{}
-	var decoder = schema.NewDecoder()
-	decoder.SetAliasTag("query")
-	if err := decoder.Decode(transformOpts, query); err != nil {
-		return nil, err
-	}
-	return transformOpts, nil
 }

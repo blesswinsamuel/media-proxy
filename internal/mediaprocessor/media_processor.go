@@ -11,6 +11,7 @@ import (
 	"github.com/bbrks/go-blurhash"
 	"github.com/davidbyttow/govips/v2/vips"
 	"github.com/galdor/go-thumbhash"
+	"github.com/rs/zerolog/log"
 )
 
 type ReadOptions struct {
@@ -101,6 +102,7 @@ func parseVipsSize(size string) (vips.Size, error) {
 
 func (mp *MediaProcessor) ProcessTransformRequest(imageBytes []byte, params *TransformOptions) ([]byte, string, error) {
 	// Load the image using libvips
+	log.Debug().Int("size", len(imageBytes)).Interface("params", params).Msg("Processing tranform request")
 	importParams := vips.NewImportParams()
 	if params.Read.Dpi > 0 {
 		importParams.Density.Set(params.Read.Dpi)
