@@ -105,6 +105,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 	mux.Use(s.prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
 	mux.HandleFunc("/{signature}/media/*", s.handleTransformRequest)
+	mux.HandleFunc("/health", s.health)
 	return s
 }
 
@@ -116,6 +117,10 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+func (s *server) health(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *server) prometheusMiddleware(next http.Handler) http.Handler {

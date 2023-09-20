@@ -53,7 +53,7 @@ func NewMediaProcessor() *MediaProcessor {
 
 func getContentType(imageBytes []byte) string {
 	contentType := http.DetectContentType(imageBytes)
-	fmt.Println(contentType)
+	// fmt.Println(contentType)
 	if contentType == "text/xml; charset=utf-8" {
 		contentType = "image/svg+xml"
 	}
