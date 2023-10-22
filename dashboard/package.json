@@ -1,0 +1,18 @@
+{
+  "scripts": {
+    "dev": "bun --watch media-proxy.ts"
+  },
+  "dependencies": {
+    "grafana-dashboard-helpers": "file:../../grafana-dashboards"
+  },
+  "devDependencies": {
+    "@types/node": "^20.6.3"
+  },
+  "prettier": {
+    "trailingComma": "es5",
+    "tabWidth": 2,
+    "semi": false,
+    "singleQuote": true,
+    "printWidth": 160
+  }
+}
