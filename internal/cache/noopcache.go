@@ -1,11 +1,10 @@
 package cache
 
 type NoopCache struct {
-	cachePath string
 }
 
-func NewNoopCache(cachePath string) Cache {
-	return &NoopCache{cachePath: cachePath}
+func NewNoopCache() Cache {
+	return &NoopCache{}
 }
 
 // Get gets the file from local filesystem

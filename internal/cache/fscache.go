@@ -4,6 +4,10 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 type FsCache struct {
@@ -11,7 +15,26 @@ type FsCache struct {
 }
 
 func NewFsCache(cachePath string) Cache {
-	return &FsCache{cachePath: cachePath}
+	cache := &FsCache{cachePath: cachePath}
+	if err := prometheus.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name:        "media_proxy_cache_fs_size_bytes",
+		ConstLabels: prometheus.Labels{"cache_path": cachePath},
+	}, func() float64 {
+		size, _, _ := cache.GetCacheSize()
+		return float64(size)
+	})); err != nil {
+		log.Warn().Err(err).Str("cache_path", cachePath).Msg("failed to register metric media_proxy_cache_fs_size_bytes")
+	}
+	if err := prometheus.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name:        "media_proxy_cache_fs_files_count",
+		ConstLabels: prometheus.Labels{"cache_path": cachePath},
+	}, func() float64 {
+		_, count, _ := cache.GetCacheSize()
+		return float64(count)
+	})); err != nil {
+		log.Warn().Err(err).Str("cache_path", cachePath).Msg("failed to register metric media_proxy_cache_fs_files_count")
+	}
+	return cache
 }
 
 // Get gets the file from local filesystem
@@ -53,4 +76,19 @@ func (c *FsCache) Exists(key string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func (c *FsCache) GetCacheSize() (int64, int64, error) {
+	var size int64
+	var count int64
+	if err := filepath.Walk(c.cachePath, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			size += info.Size()
+			count++
+		}
+		return err
+	}); err != nil {
+		return 0, 0, err
+	}
+	return size, count, nil
 }

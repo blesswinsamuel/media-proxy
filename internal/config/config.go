@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -10,6 +11,19 @@ import (
 	"github.com/jessevdk/go-flags"
 	"github.com/joho/godotenv"
 )
+
+// https://github.com/jessevdk/go-flags/issues/80#issuecomment-46948148
+type Boolean struct{ Value bool }
+
+func (b *Boolean) UnmarshalFlag(value string) error {
+	bl, err := strconv.ParseBool(value)
+	*b = Boolean{bl}
+	return err
+}
+
+func (b Boolean) MarshalFlag() string {
+	return strconv.FormatBool(b.Value)
+}
 
 // Config holds the runtime application config
 type Config struct {
@@ -22,10 +36,12 @@ type Config struct {
 	Port        string               `long:"port" env:"PORT" default:"8080" description:"Port to listen on"`
 	MetricsPort string               `long:"metrics-port" env:"METRICS_PORT" default:"8081" description:"Metrics port to listen on"`
 
-	BaseURL      string `long:"base-url" env:"BASE_URL" default:"" description:"Base URL"`
-	CacheDir     string `long:"cache-dir" env:"CACHE_DIR" default:"/tmp/cache" description:"Cache directory"`
-	EnableUnsafe bool   `long:"enable-unsafe" env:"ENABLE_UNSAFE" description:"Enable unsafe operations"`
-	Secret       string `long:"secret" env:"SECRET" default:"" description:"Secret"`
+	BaseURL           string  `long:"base-url" env:"BASE_URL" default:"" description:"Base URL"`
+	EnableLoaderCache Boolean `long:"enable-loader-cache" env:"ENABLE_LOADER_CACHE" default:"true" description:"Enable loader cache"`
+	EnableResultCache Boolean `long:"enable-result-cache" env:"ENABLE_RESULT_CACHE" default:"true" description:"Enable result cache"`
+	CacheDir          string  `long:"cache-dir" env:"CACHE_DIR" default:"/tmp/cache" description:"Cache directory"`
+	EnableUnsafe      Boolean `long:"enable-unsafe" env:"ENABLE_UNSAFE" default:"false" description:"Enable unsafe operations"`
+	Secret            string  `long:"secret" env:"SECRET" default:"" description:"Secret"`
 
 	Concurrency int `long:"concurrency" env:"CONCURRENCY" default:"8" description:"Concurrency"`
 }
@@ -59,7 +75,7 @@ func ParseConfig(args []string) (*Config, error) {
 	if c.BaseURL != "" {
 		c.BaseURL = c.BaseURL + "/"
 	}
-	if !c.EnableUnsafe {
+	if !c.EnableUnsafe.Value {
 		if c.Secret == "" {
 			log.Fatal().Msg("SECRET must be set when ENABLE_UNSAFE=false")
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/blesswinsamuel/media-proxy/internal/mediaprocessor"
 	"github.com/blesswinsamuel/media-proxy/internal/server"
 	"github.com/davidbyttow/govips/v2/vips"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog"
 )
 
@@ -59,19 +60,52 @@ func main() {
 		log.Debug().Str("domain", messageDomain).Str("level", messageLevelDescription).Msg(message)
 	}, vips.LogLevelWarning)
 	vips.Startup(&vips.Config{
-		ConcurrencyLevel: 1,
-		MaxCacheFiles:    0,
-		MaxCacheMem:      50 * 1024 * 1024,
-		MaxCacheSize:     100,
-		// ReportLeaks      :
+		// https://www.libvips.org/API/current/VipsOperation.html#vips-concurrency-set
+		ConcurrencyLevel: 4,
+		// https://www.libvips.org/API/current/VipsOperation.html#vips-cache-set-max-files
+		MaxCacheFiles: 0,
+		// https://www.libvips.org/API/current/VipsOperation.html#vips-cache-set-max-mem
+		MaxCacheMem: 50 * 1024 * 1024,
+		// https://www.libvips.org/API/current/VipsOperation.html#vips-cache-set-max
+		MaxCacheSize: 100,
+		// https://www.libvips.org/API/current/libvips-vips.html#vips-leak-set
+		ReportLeaks: true,
+		// https://www.libvips.org/API/current/VipsOperation.html#vips-cache-set-trace
 		// CacheTrace       :
-		// CollectStats     :
+		CollectStats: true,
 	})
 	defer vips.Shutdown()
 
-	loaderCache := cache.NewFsCache(path.Join(config.CacheDir, "original"))
-	metadataCache := cache.NewFsCache(path.Join(config.CacheDir, "metadata"))
-	resultCache := cache.NewFsCache(path.Join(config.CacheDir, "result"))
+	prometheus.MustRegister(mediaprocessor.NewVipsPrometheusCollector())
+
+	// go func() {
+	// 	for {
+	// 		// runtimeStats := vips.RuntimeStats{}
+	// 		// vips.ReadRuntimeStats(&runtimeStats)
+	// 		// fmt.Println(runtimeStats)
+
+	// 		// memoryStats := vips.MemoryStats{}
+	// 		// vips.ReadVipsMemStats(&memoryStats)
+	// 		// fmt.Println(memoryStats)
+
+	// 		time.Sleep(5 * time.Second)
+
+	// 		vips.PrintObjectReport("main")
+	// 	}
+	// }()
+	var loaderCache, metadataCache, resultCache cache.Cache
+	if config.EnableLoaderCache.Value {
+		loaderCache = cache.NewFsCache(path.Join(config.CacheDir, "original"))
+	} else {
+		loaderCache = cache.NewNoopCache()
+	}
+	if config.EnableResultCache.Value {
+		metadataCache = cache.NewFsCache(path.Join(config.CacheDir, "metadata"))
+		resultCache = cache.NewFsCache(path.Join(config.CacheDir, "result"))
+	} else {
+		metadataCache = cache.NewNoopCache()
+		resultCache = cache.NewNoopCache()
+	}
 
 	mediaProcessor := mediaprocessor.NewMediaProcessor()
 	loader := loader.NewHTTPLoader(config.BaseURL)
@@ -80,7 +114,7 @@ func main() {
 		Port:         config.Port,
 		MetricsPort:  config.MetricsPort,
 		Secret:       config.Secret,
-		EnableUnsafe: config.EnableUnsafe,
+		EnableUnsafe: bool(config.EnableUnsafe.Value),
 		AutoAvif:     true,
 		AutoWebp:     true,
 		Concurrency:  config.Concurrency,

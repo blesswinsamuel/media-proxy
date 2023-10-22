@@ -40,8 +40,8 @@ var (
 		Name: "media_proxy_active_conns",
 		Help: "Active connections",
 	})
-	networkConns = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "media_proxy_network_conns_count",
+	networkConnsTotal = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "media_proxy_network_conns_count_total",
 		Help: "Network connections count",
 	}, []string{"state"})
 )
@@ -77,7 +77,7 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		WriteTimeout:      20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		ConnState: func(c net.Conn, cs http.ConnState) {
-			networkConns.WithLabelValues(cs.String()).Inc()
+			networkConnsTotal.WithLabelValues(cs.String()).Inc()
 			switch cs {
 			case http.StateNew:
 				activeConns.Inc()
@@ -102,10 +102,9 @@ func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcesso
 		BacklogTimeout: 60 * time.Second,
 	}))
 	mux.Use(middleware.RequestID)
-	mux.Use(s.prometheusMiddleware)
+	mux.Use(prometheusMiddleware)
 	mux.HandleFunc("/{signature}/metadata/*", s.handleMetadataRequest)
 	mux.HandleFunc("/{signature}/media/*", s.handleTransformRequest)
-	mux.HandleFunc("/health", s.health)
 	return s
 }
 
@@ -123,27 +122,38 @@ func (s *server) health(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *server) prometheusMiddleware(next http.Handler) http.Handler {
+func prometheusMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		activeRequests.Inc()
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w, statusCode: http.StatusOK}
 		next.ServeHTTP(sw, r)
 		routePattern := chi.RouteContext(r.Context()).RoutePattern()
-		requestDuration.WithLabelValues(r.Method, routePattern, strconv.Itoa(sw.statusCode)).Observe(time.Since(start).Seconds())
+		statusCode := strconv.Itoa(sw.statusCode)
+		requestDuration.WithLabelValues(r.Method, routePattern, statusCode).Observe(time.Since(start).Seconds())
 		activeRequests.Dec()
 	})
 }
 
 func (s *server) Start() {
 	go func() {
-		log.Printf("Server listening on port %s", s.srv.Addr)
+		log.Info().Msgf("Server listening on port %s", s.srv.Addr)
 		if err := s.srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("")
 		}
 	}()
 	go func() {
-		http.ListenAndServe(":"+s.config.MetricsPort, promhttp.Handler())
+		mux := chi.NewRouter()
+		mux.HandleFunc("/health", s.health)
+		mux.Handle("/metrics", promhttp.Handler())
+		srv := &http.Server{
+			Addr:    ":" + s.config.MetricsPort,
+			Handler: mux,
+		}
+		log.Info().Msgf("Metrics server listening on port %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatal().Err(err).Msg("")
+		}
 	}()
 }
 
