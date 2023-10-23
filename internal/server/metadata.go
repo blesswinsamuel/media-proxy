@@ -32,7 +32,7 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 	logger.Debug().Interface("opts", info.RequestParams).Msg("Incoming Request")
 
 	params := info.RequestParams
-	out, err := cache.GetCachedOrFetch(s.metadataCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
+	out, err := cache.GetCachedOrFetch(s.metadataCache, info.MediaPath+"?"+params.String(), func() ([]byte, error) {
 		imageBytes, err := s.getOriginalImage(ctx, info.MediaPath)
 		if err != nil {
 			return nil, err

@@ -28,6 +28,14 @@ type MetadataOptions struct {
 	PotatoWebp bool `query:"potatowebp"`
 }
 
+func (mo *MetadataOptions) String() string {
+	jsonStr, err := json.Marshal(mo)
+	if err != nil {
+		panic(err) // this should never happen if the struct is valid
+	}
+	return string(jsonStr)
+}
+
 type TransformOptionsResize struct {
 	Width  int    `query:"width"`
 	Height int    `query:"height"`
@@ -36,12 +44,19 @@ type TransformOptionsResize struct {
 	// Method  string // fill or fit
 	// Gravity string // valid if method is fill. top, bottom, left, right, center, top right, top left, bottom right, bottom left, smart
 }
-
 type TransformOptions struct {
 	Raw          bool                    `query:"raw"`
 	Read         ReadOptions             `query:"read"`
 	Resize       *TransformOptionsResize `query:"resize"`
 	OutputFormat string                  `query:"outputFormat"`
+}
+
+func (to *TransformOptions) String() string {
+	jsonStr, err := json.Marshal(to)
+	if err != nil {
+		panic(err) // this should never happen if the struct is valid
+	}
+	return string(jsonStr)
 }
 
 type MediaProcessor struct {

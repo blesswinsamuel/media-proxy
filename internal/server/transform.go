@@ -25,40 +25,42 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 
 	params := info.RequestParams
 
-	out, err := cache.GetCachedOrFetch(s.resultCache, info.MediaPath+"?"+r.URL.Query().Encode(), func() ([]byte, error) {
+	if params.OutputFormat == "" {
+		selectedContentType := ""
+		acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
+		if len(acceptedContentTypes) > 0 {
+			for _, acceptedContentType := range acceptedContentTypes {
+				if acceptedContentType == "image/avif" {
+					// TODO: find why I disabled avif
+					continue
+				}
+				if strings.HasPrefix(acceptedContentType, "image/") {
+					selectedContentType = strings.TrimSpace(acceptedContentType)
+					break
+				}
+			}
+		}
+		switch selectedContentType {
+		case "image/webp":
+			params.OutputFormat = "webp"
+		case "image/jpeg":
+			params.OutputFormat = "jpeg"
+		case "image/png":
+			params.OutputFormat = "png"
+		case "image/avif":
+			params.OutputFormat = "avif"
+		case "image/apng":
+			params.OutputFormat = "apng"
+		}
+	}
+
+	out, err := cache.GetCachedOrFetch(s.resultCache, info.MediaPath+"?"+params.String(), func() ([]byte, error) {
 		imageBytes, err := s.getOriginalImage(ctx, info.MediaPath)
 		if err != nil {
 			return nil, err
 		}
-
 		if params.OutputFormat == "" {
-			contentType := http.DetectContentType(imageBytes)
-			acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
-			if len(acceptedContentTypes) > 0 {
-				for _, acceptedContentType := range acceptedContentTypes {
-					if acceptedContentType == "image/avif" {
-						continue
-					}
-					if strings.HasPrefix(acceptedContentType, "image/") {
-						contentType = strings.TrimSpace(acceptedContentType)
-						break
-					}
-				}
-			}
-			switch contentType {
-			case "image/webp":
-				params.OutputFormat = "webp"
-			case "image/jpeg":
-				params.OutputFormat = "jpeg"
-			case "image/png":
-				params.OutputFormat = "png"
-			case "image/avif":
-				params.OutputFormat = "avif"
-			case "image/apng":
-				params.OutputFormat = "apng"
-			default:
-				params.OutputFormat = "png"
-			}
+			params.OutputFormat = "png"
 		}
 
 		out, contentType, err := s.mediaProcessor.ProcessTransformRequest(imageBytes, params)
