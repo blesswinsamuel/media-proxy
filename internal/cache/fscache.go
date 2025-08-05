@@ -6,21 +6,25 @@ import (
 	"path"
 	"path/filepath"
 
+	"github.com/blesswinsamuel/media-proxy/internal/cache/cacheindex"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
 
 type FsCache struct {
 	cachePath string
+
+	cacheIndex cacheindex.CacheIndex
 }
 
 func NewFsCache(cachePath string) Cache {
-	cache := &FsCache{cachePath: cachePath}
+	cacheIndex := cacheindex.NewCacheIndexLevelDB(path.Join(cachePath, "index"))
+	cache := &FsCache{cachePath: cachePath, cacheIndex: cacheIndex}
 	if err := prometheus.Register(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 		Name:        "media_proxy_cache_fs_size_bytes",
 		ConstLabels: prometheus.Labels{"cache_path": cachePath},
 	}, func() float64 {
-		size, _, _ := cache.GetCacheSize()
+		size, _, _ := cache.getCacheSize()
 		return float64(size)
 	})); err != nil {
 		log.Warn().Err(err).Str("cache_path", cachePath).Msg("failed to register metric media_proxy_cache_fs_size_bytes")
@@ -29,7 +33,7 @@ func NewFsCache(cachePath string) Cache {
 		Name:        "media_proxy_cache_fs_files_count",
 		ConstLabels: prometheus.Labels{"cache_path": cachePath},
 	}, func() float64 {
-		_, count, _ := cache.GetCacheSize()
+		_, count, _ := cache.getCacheSize()
 		return float64(count)
 	})); err != nil {
 		log.Warn().Err(err).Str("cache_path", cachePath).Msg("failed to register metric media_proxy_cache_fs_files_count")
@@ -48,7 +52,14 @@ func (c *FsCache) Get(key string) ([]byte, error) {
 		return nil, err
 	}
 	defer file.Close()
-	return io.ReadAll(file)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		return nil, err
+	}
+	if err := cacheindex.UpdateIndex(c.cacheIndex, key, data); err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 // Put puts a file into the filesystem cache
@@ -62,7 +73,12 @@ func (c *FsCache) Put(key string, data []byte) error {
 		return err
 	}
 	defer file.Close()
-	file.Write(data)
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := cacheindex.UpdateIndex(c.cacheIndex, key, data); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -78,7 +94,7 @@ func (c *FsCache) Exists(key string) (bool, error) {
 	return true, nil
 }
 
-func (c *FsCache) GetCacheSize() (int64, int64, error) {
+func (c *FsCache) getCacheSize() (int64, int64, error) {
 	var size int64
 	var count int64
 	if err := filepath.Walk(c.cachePath, func(_ string, info os.FileInfo, err error) error {
