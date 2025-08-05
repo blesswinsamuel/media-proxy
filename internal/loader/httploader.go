@@ -60,7 +60,7 @@ func (l *HTTPLoader) GetMedia(ctx context.Context, mediaPath string) ([]byte, er
 	}
 	resp, err := l.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch image: %w", err)
+		return nil, fmt.Errorf("failed to fetch image %q: %w", mediaPath, err)
 	}
 	defer resp.Body.Close()
 	statusCode = resp.StatusCode
@@ -69,7 +69,7 @@ func (l *HTTPLoader) GetMedia(ctx context.Context, mediaPath string) ([]byte, er
 		if err != nil {
 			body = []byte(fmt.Sprintf("failed to read response body: %s", resp.Status))
 		}
-		return nil, fmt.Errorf("failed to fetch image: %s. Body: %q", resp.Status, body)
+		return nil, fmt.Errorf("failed to fetch image %q: %s. Body: %q", mediaPath, resp.Status, body)
 	}
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
