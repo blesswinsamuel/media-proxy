@@ -69,12 +69,12 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 		}
 		return concatenateContentTypeAndData(contentType, out), nil
 	})
-	contentType, out := getContentTypeAndData(out)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process metadata request")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	contentType, out := getContentTypeAndData(out)
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	w.Header().Set("Content-Length", strconv.Itoa(len(out)))
