@@ -24,7 +24,11 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 	info, err := getRequestInfo(s, r, "metadata", parseMetadataQuery)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get request info")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if httpErr, ok := err.(*HTTPError); ok {
+			http.Error(w, httpErr.Message, httpErr.Code)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	logger := log.With().Str("method", r.Method).Stringer("url", r.URL).Logger()
@@ -43,11 +47,15 @@ func (s *server) handleMetadataRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		return out, nil
 	})
-	w.Header().Set("Content-Type", "application/json")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to process metadata request")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if httpErr, ok := err.(*HTTPError); ok {
+			http.Error(w, httpErr.Message, httpErr.Code)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.Write(out)
 }

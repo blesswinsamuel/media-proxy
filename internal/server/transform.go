@@ -16,7 +16,11 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 	info, err := getRequestInfo(s, r, "media", parseTransformQuery)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get request info")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		if httpErr, ok := err.(*HTTPError); ok {
+			http.Error(w, httpErr.Message, httpErr.Code)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	logger := log.With().Str("method", r.Method).Stringer("url", r.URL).Logger()
@@ -70,8 +74,12 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 		return concatenateContentTypeAndData(contentType, out), nil
 	})
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to process metadata request")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.Error().Err(err).Msg("Failed to process transform request")
+		if httpErr, ok := err.(*HTTPError); ok {
+			http.Error(w, httpErr.Message, httpErr.Code)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
 		return
 	}
 	contentType, out := getContentTypeAndData(out)
