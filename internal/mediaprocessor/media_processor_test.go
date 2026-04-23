@@ -10,6 +10,67 @@ import (
 	"github.com/davidbyttow/govips/v2/vips"
 )
 
+func TestParseVipsInteresting(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    vips.Interesting
+		wantErr bool
+	}{
+		{"", vips.InterestingNone, false},
+		{"none", vips.InterestingNone, false},
+		{"centre", vips.InterestingCentre, false},
+		{"entropy", vips.InterestingEntropy, false},
+		{"attention", vips.InterestingAttention, false},
+		{"low", vips.InterestingLow, false},
+		{"high", vips.InterestingHigh, false},
+		{"all", vips.InterestingAll, false},
+		{"last", vips.InterestingLast, false},
+		{"invalid", 0, true},
+		{"CENTER", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseVipsInteresting(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseVipsInteresting(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("parseVipsInteresting(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseVipsSize(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    vips.Size
+		wantErr bool
+	}{
+		{"", vips.SizeBoth, false},
+		{"both", vips.SizeBoth, false},
+		{"up", vips.SizeUp, false},
+		{"down", vips.SizeDown, false},
+		{"force", vips.SizeForce, false},
+		{"last", vips.SizeLast, false},
+		{"invalid", 0, true},
+		{"DOWN", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseVipsSize(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("parseVipsSize(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && got != tt.want {
+				t.Errorf("parseVipsSize(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func downloadFile(url, fileName string) error {
 	//Get the response bytes from the url
 	response, err := http.Get(url)
