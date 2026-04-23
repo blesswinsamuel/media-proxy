@@ -29,7 +29,7 @@ RUN if [ "${TARGETARCH}" = "arm64" ] ; then \
 
 # RUN apt-get update && apt-get install -y libvips && apt-get clean
 
-FROM alpine:3.21
+FROM alpine:3.23
 
 RUN apk add --no-cache gcompat vips vips-poppler
 
