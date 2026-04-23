@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"net/http"
+	"strings"
 
 	"github.com/bbrks/go-blurhash"
 	"github.com/davidbyttow/govips/v2/vips"
@@ -68,9 +69,13 @@ func NewMediaProcessor() *MediaProcessor {
 
 func getContentType(imageBytes []byte) string {
 	contentType := http.DetectContentType(imageBytes)
-	// fmt.Println(contentType)
+	// http.DetectContentType cannot distinguish SVG from generic XML/text.
+	// Check for an <svg element in the first 512 bytes to identify SVGs correctly.
 	if contentType == "text/xml; charset=utf-8" || contentType == "text/plain; charset=utf-8" {
-		contentType = "image/svg+xml"
+		sniff := strings.ToLower(string(imageBytes[:min(512, len(imageBytes))]))
+		if strings.Contains(sniff, "<svg") {
+			contentType = "image/svg+xml"
+		}
 	}
 	return contentType
 }
