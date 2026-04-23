@@ -62,7 +62,9 @@ func (c *FsCache) Put(key string, data []byte) error {
 		return err
 	}
 	defer file.Close()
-	file.Write(data)
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
 	return nil
 }
 
