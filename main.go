@@ -78,21 +78,6 @@ func main() {
 
 	prometheus.MustRegister(mediaprocessor.NewVipsPrometheusCollector())
 
-	// go func() {
-	// 	for {
-	// 		// runtimeStats := vips.RuntimeStats{}
-	// 		// vips.ReadRuntimeStats(&runtimeStats)
-	// 		// fmt.Println(runtimeStats)
-
-	// 		// memoryStats := vips.MemoryStats{}
-	// 		// vips.ReadVipsMemStats(&memoryStats)
-	// 		// fmt.Println(memoryStats)
-
-	// 		time.Sleep(5 * time.Second)
-
-	// 		vips.PrintObjectReport("main")
-	// 	}
-	// }()
 	var loaderCache, metadataCache, resultCache cache.Cache
 	if config.EnableLoaderCache.Value {
 		loaderCache = cache.NewFsCache(filepath.Join(config.CacheDir, "original"))

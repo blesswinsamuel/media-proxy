@@ -11,51 +11,6 @@ import (
 	"time"
 )
 
-// func main() {
-// 	websiteURL := os.Getenv("WEBSITE_URL")
-// 	assetsURL := os.Getenv("ASSETS_URL")
-
-// 	pagesCrawled := make(map[string]bool)
-// 	mediaMap := make(map[string][]string)
-
-// 	var crawlFn func(pageURL string)
-// 	crawlFn = func(pageURL string) {
-// 		if pagesCrawled[pageURL] {
-// 			return
-// 		}
-// 		pageHtml, err := getPageMedia(pageURL, assetsURL)
-// 		if err != nil {
-// 			log.Panicln(err)
-// 		}
-// 		mediaMatches := regexp.MustCompile(fmt.Sprintf(`["'](%s[^"' ]+)["']`, assetsURL)).FindAllStringSubmatch(string(pageHtml), -1)
-// 		pageMedia := make([]string, len(mediaMatches))
-// 		for i, match := range mediaMatches {
-// 			m := match[1]
-// 			m = strings.ReplaceAll(m, "&amp;", "&")
-// 			m = strings.ReplaceAll(m, "\\u0026", "&")
-// 			pageMedia[i] = m
-// 		}
-// 		log.Printf("Page %s: %d media files", websiteURL, len(pageMedia))
-// 		pagesCrawled[pageURL] = true
-// 		mediaMap[pageURL] = pageMedia
-
-// 		subpageMatches := regexp.MustCompile(fmt.Sprintf(`["'](%s[^"' ]+)["']`, websiteURL)).FindAllStringSubmatch(string(pageHtml), -1)
-// 		for _, subpageURL := range subpageMatches {
-// 			crawlFn(subpageURL[1])
-// 		}
-// 	}
-// 	crawlFn(websiteURL)
-
-//		// log.Printf("Page %s: %d media files", websiteURL, len(pageMedia))
-//		// for _, mediaURL := range pageMedia {
-//		// 	startTime := time.Now()
-//		// 	image, err := fetchMedia(mediaURL)
-//		// 	if err != nil {
-//		// 		log.Panicln(err)
-//		// 	}
-//		// 	log.Printf("  - Fetched %s (%.2fKB). Took %v", mediaURL, float64(len(image))/1000.0, time.Since(startTime))
-//		// }
-//	}
 func main() {
 	websiteURL := os.Getenv("WEBSITE_URL")
 	assetsURL := os.Getenv("ASSETS_URL")
