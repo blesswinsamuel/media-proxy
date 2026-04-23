@@ -47,6 +47,7 @@ var (
 )
 
 type ServerConfig struct {
+	Host         string
 	Port         string
 	MetricsPort  string
 	Secret       string
@@ -70,7 +71,7 @@ type server struct {
 func NewServer(config ServerConfig, mediaProcessor *mediaprocessor.MediaProcessor, loader loader.Loader, loaderCache cache.Cache, metadataCache cache.Cache, resultCache cache.Cache) *server {
 	mux := chi.NewRouter()
 	srv := &http.Server{
-		Addr:              ":" + config.Port,
+		Addr:              config.Host + ":" + config.Port,
 		Handler:           mux,
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,

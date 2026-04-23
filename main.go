@@ -111,6 +111,7 @@ func main() {
 	loader := loader.NewHTTPLoader(config.BaseURL)
 
 	server := server.NewServer(server.ServerConfig{
+		Host:         config.Host,
 		Port:         config.Port,
 		MetricsPort:  config.MetricsPort,
 		Secret:       config.Secret,
