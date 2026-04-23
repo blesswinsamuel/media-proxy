@@ -26,6 +26,8 @@ var (
 	})
 )
 
+const maxResponseBodySize = 100 * 1024 * 1024 // 100 MB
+
 type HTTPLoader struct {
 	baseURL string
 	client  *http.Client
@@ -71,7 +73,7 @@ func (l *HTTPLoader) GetMedia(ctx context.Context, mediaPath string) ([]byte, er
 		}
 		return nil, fmt.Errorf("failed to fetch image %q: %s. Body: %q", mediaPath, resp.Status, body)
 	}
-	bodyBytes, err := io.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
