@@ -250,7 +250,5 @@ func (s *server) validateSignature(signature string, imagePath string) bool {
 	hash := hmac.New(sha1.New, []byte(s.config.Secret))
 	hash.Write([]byte(imagePath))
 	expectedHash := base64.URLEncoding.EncodeToString(hash.Sum(nil))
-	// expectedHash = expectedHash[:40]
-	// log.Debug().Msgf("expected hash (%s): %s", imagePath, expectedHash)
-	return expectedHash == signature
+	return hmac.Equal([]byte(expectedHash), []byte(signature))
 }
