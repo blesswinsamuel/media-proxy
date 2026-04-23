@@ -146,8 +146,12 @@ func (s *server) Start() {
 		mux.HandleFunc("/health", s.health)
 		mux.Handle("/metrics", promhttp.Handler())
 		srv := &http.Server{
-			Addr:    ":" + s.config.MetricsPort,
-			Handler: mux,
+			Addr:              ":" + s.config.MetricsPort,
+			Handler:           mux,
+			ReadTimeout:       5 * time.Second,
+			ReadHeaderTimeout: 5 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       120 * time.Second,
 		}
 		log.Info().Msgf("Metrics server listening on port %s", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
