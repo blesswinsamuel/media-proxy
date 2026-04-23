@@ -33,10 +33,6 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 		acceptedContentTypes := strings.Split(r.Header.Get("Accept"), ",")
 		if len(acceptedContentTypes) > 0 {
 			for _, acceptedContentType := range acceptedContentTypes {
-				if acceptedContentType == "image/avif" {
-					// TODO: find why I disabled avif
-					continue
-				}
 				if strings.HasPrefix(acceptedContentType, "image/") {
 					selectedContentType = strings.TrimSpace(acceptedContentType)
 					break
