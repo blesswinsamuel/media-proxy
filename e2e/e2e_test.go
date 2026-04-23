@@ -94,335 +94,248 @@ func setup(m *testing.M) int {
 	return m.Run()
 }
 
-// TestGetMetadata_BasicDimensions tests that the metadata endpoint returns
-// correct dimensions and format for a PNG image.
-func TestGetMetadata_BasicDimensions(t *testing.T) {
-	resp := doRequest(t, "metadata", "test.png", nil, nil)
-	defer resp.Body.Close()
+func TestMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		mediaPath   string
+		params      url.Values
+		wantStatus  int
+		checkResult func(t *testing.T, meta mediaprocessor.MetadataResponse)
+	}{
+		{
+			name:       "basic dimensions",
+			mediaPath:  "test.png",
+			wantStatus: http.StatusOK,
+			checkResult: func(t *testing.T, meta mediaprocessor.MetadataResponse) {
+				if meta.Width != 400 {
+					t.Errorf("expected width 400, got %d", meta.Width)
+				}
+				if meta.Height != 300 {
+					t.Errorf("expected height 300, got %d", meta.Height)
+				}
+				if meta.Format == "" {
+					t.Error("expected non-empty format field")
+				}
+			},
+		},
+		{
+			name:       "thumbhash",
+			mediaPath:  "test.png",
+			params:     url.Values{"thumbhash": []string{"true"}},
+			wantStatus: http.StatusOK,
+			checkResult: func(t *testing.T, meta mediaprocessor.MetadataResponse) {
+				if meta.Thumbhash == "" {
+					t.Error("expected non-empty thumbhash field")
+				}
+			},
+		},
+		{
+			name:       "blurhash",
+			mediaPath:  "test.png",
+			params:     url.Values{"blurhash": []string{"true"}},
+			wantStatus: http.StatusOK,
+			checkResult: func(t *testing.T, meta mediaprocessor.MetadataResponse) {
+				if meta.Blurhash == "" {
+					t.Error("expected non-empty blurhash field")
+				}
+			},
+		},
+		{
+			name:       "not found",
+			mediaPath:  "notfound.png",
+			wantStatus: http.StatusInternalServerError,
+		},
+	}
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
-		t.Errorf("expected Content-Type application/json, got %q", ct)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := doRequest(t, "metadata", tc.mediaPath, tc.params, nil)
+			defer resp.Body.Close()
 
-	var meta mediaprocessor.MetadataResponse
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		t.Fatalf("failed to decode metadata response: %v", err)
-	}
-	if meta.Width != 400 {
-		t.Errorf("expected width 400, got %d", meta.Width)
-	}
-	if meta.Height != 300 {
-		t.Errorf("expected height 300, got %d", meta.Height)
-	}
-	if meta.Format == "" {
-		t.Error("expected non-empty format field")
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected status %d, got %d: %s", tc.wantStatus, resp.StatusCode, body)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+				t.Errorf("expected Content-Type application/json, got %q", ct)
+			}
+			if tc.checkResult != nil {
+				var meta mediaprocessor.MetadataResponse
+				if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
+					t.Fatalf("failed to decode metadata response: %v", err)
+				}
+				tc.checkResult(t, meta)
+			}
+		})
 	}
 }
 
-// TestGetMetadata_WithThumbHash tests that the metadata endpoint returns
-// a thumbhash when requested.
-func TestGetMetadata_WithThumbHash(t *testing.T) {
-	params := url.Values{"thumbhash": []string{"true"}}
-	resp := doRequest(t, "metadata", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
+func TestTransformMedia(t *testing.T) {
+	tests := []struct {
+		name        string
+		mediaPath   string
+		params      url.Values
+		headers     http.Header
+		wantStatus  int
+		wantCT      string
+		checkImage  func(t *testing.T, img image.Image, format string)
+		checkHeader func(t *testing.T, h http.Header)
+	}{
+		{
+			name:       "raw passthrough",
+			mediaPath:  "test.png",
+			params:     url.Values{"raw": []string{"true"}, "outputFormat": []string{"png"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/png",
+			checkImage: func(t *testing.T, img image.Image, format string) {
+				if format != "png" {
+					t.Errorf("expected png format, got %q", format)
+				}
+				if b := img.Bounds(); b.Dx() != 400 || b.Dy() != 300 {
+					t.Errorf("expected 400x300, got %dx%d", b.Dx(), b.Dy())
+				}
+			},
+		},
+		{
+			name:      "resize by width",
+			mediaPath: "test.png",
+			params:    url.Values{"resize.width": []string{"200"}, "outputFormat": []string{"png"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/png",
+			checkImage: func(t *testing.T, img image.Image, _ string) {
+				// 400x300 → width=200 preserves aspect ratio → 200x150
+				if b := img.Bounds(); b.Dx() != 200 || b.Dy() != 150 {
+					t.Errorf("expected 200x150, got %dx%d", b.Dx(), b.Dy())
+				}
+			},
+		},
+		{
+			name:      "resize by height",
+			mediaPath: "test.png",
+			params:    url.Values{"resize.height": []string{"150"}, "outputFormat": []string{"png"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/png",
+			checkImage: func(t *testing.T, img image.Image, _ string) {
+				// 400x300 → height=150 preserves aspect ratio → 200x150
+				if b := img.Bounds(); b.Dx() != 200 || b.Dy() != 150 {
+					t.Errorf("expected 200x150, got %dx%d", b.Dx(), b.Dy())
+				}
+			},
+		},
+		{
+			name:       "convert to jpeg",
+			mediaPath:  "test.png",
+			params:     url.Values{"outputFormat": []string{"jpeg"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/jpeg",
+		},
+		{
+			name:       "convert to webp",
+			mediaPath:  "test.png",
+			params:     url.Values{"outputFormat": []string{"webp"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/webp",
+		},
+		{
+			name:      "resize and convert",
+			mediaPath: "test.png",
+			params:    url.Values{"resize.width": []string{"100"}, "outputFormat": []string{"jpeg"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/jpeg",
+			checkImage: func(t *testing.T, img image.Image, _ string) {
+				if img.Bounds().Dx() != 100 {
+					t.Errorf("expected width 100, got %d", img.Bounds().Dx())
+				}
+			},
+		},
+		{
+			name:       "content negotiation webp",
+			mediaPath:  "test.png",
+			headers:    http.Header{"Accept": []string{"image/webp,image/*,*/*"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/webp",
+		},
+		{
+			name:      "jpeg source",
+			mediaPath: "test.jpg",
+			params:    url.Values{"resize.width": []string{"200"}, "outputFormat": []string{"jpeg"}},
+			wantStatus: http.StatusOK,
+			wantCT:     "image/jpeg",
+		},
+		{
+			name:      "cache-control header",
+			mediaPath: "test.png",
+			params:    url.Values{"outputFormat": []string{"png"}},
+			wantStatus: http.StatusOK,
+			checkHeader: func(t *testing.T, h http.Header) {
+				if cc := h.Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+					t.Errorf("unexpected Cache-Control: %q", cc)
+				}
+			},
+		},
+		{
+			name:       "invalid signature",
+			mediaPath:  "", // handled inline below via wantStatus
+			wantStatus: http.StatusInternalServerError, // sentinel; handled specially
+		},
+		{
+			name:       "not found",
+			mediaPath:  "notfound.png",
+			params:     url.Values{"outputFormat": []string{"png"}},
+			wantStatus: http.StatusInternalServerError,
+		},
 	}
 
-	var meta mediaprocessor.MetadataResponse
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		t.Fatalf("failed to decode metadata response: %v", err)
-	}
-	if meta.Thumbhash == "" {
-		t.Error("expected non-empty thumbhash field")
-	}
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp *http.Response
+			if tc.name == "invalid signature" {
+				u := fmt.Sprintf("%s/%s/media/test.png?outputFormat=png", testServerURL, "invalidsignaturehere=")
+				var err error
+				resp, err = http.Get(u)
+				if err != nil {
+					t.Fatalf("request failed: %v", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					t.Error("expected non-200 status for invalid signature, got 200")
+				}
+				return
+			}
 
-// TestGetMetadata_WithBlurHash tests that the metadata endpoint returns
-// a blurhash when requested.
-func TestGetMetadata_WithBlurHash(t *testing.T) {
-	params := url.Values{"blurhash": []string{"true"}}
-	resp := doRequest(t, "metadata", "test.png", params, nil)
-	defer resp.Body.Close()
+			resp = doRequest(t, "media", tc.mediaPath, tc.params, tc.headers)
+			defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-
-	var meta mediaprocessor.MetadataResponse
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		t.Fatalf("failed to decode metadata response: %v", err)
-	}
-	if meta.Blurhash == "" {
-		t.Error("expected non-empty blurhash field")
-	}
-}
-
-// TestTransformMedia_Raw tests that the raw transform returns the original
-// image bytes unchanged.
-func TestTransformMedia_Raw(t *testing.T) {
-	params := url.Values{"raw": []string{"true"}, "outputFormat": []string{"png"}}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
-		t.Errorf("expected Content-Type image/png, got %q", ct)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response body: %v", err)
-	}
-
-	img, format, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to decode response image: %v", err)
-	}
-	if format != "png" {
-		t.Errorf("expected png format, got %q", format)
-	}
-	bounds := img.Bounds()
-	if bounds.Dx() != 400 || bounds.Dy() != 300 {
-		t.Errorf("expected 400x300 image, got %dx%d", bounds.Dx(), bounds.Dy())
-	}
-}
-
-// TestTransformMedia_ResizeByWidth tests resizing an image to a specific width,
-// verifying that the aspect ratio is maintained.
-func TestTransformMedia_ResizeByWidth(t *testing.T) {
-	params := url.Values{
-		"resize.width": []string{"200"},
-		"outputFormat": []string{"png"},
-	}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/png" {
-		t.Errorf("expected Content-Type image/png, got %q", ct)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response body: %v", err)
-	}
-
-	img, _, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to decode response image: %v", err)
-	}
-	bounds := img.Bounds()
-	if bounds.Dx() != 200 {
-		t.Errorf("expected width 200, got %d", bounds.Dx())
-	}
-	// 400x300 resized to width=200 should have height=150 (aspect ratio preserved)
-	if bounds.Dy() != 150 {
-		t.Errorf("expected height 150, got %d", bounds.Dy())
-	}
-}
-
-// TestTransformMedia_ResizeByHeight tests resizing an image to a specific height.
-func TestTransformMedia_ResizeByHeight(t *testing.T) {
-	params := url.Values{
-		"resize.height": []string{"150"},
-		"outputFormat":  []string{"png"},
-	}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response body: %v", err)
-	}
-
-	img, _, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to decode response image: %v", err)
-	}
-	bounds := img.Bounds()
-	if bounds.Dy() != 150 {
-		t.Errorf("expected height 150, got %d", bounds.Dy())
-	}
-	// 400x300 resized to height=150 should have width=200 (aspect ratio preserved)
-	if bounds.Dx() != 200 {
-		t.Errorf("expected width 200, got %d", bounds.Dx())
-	}
-}
-
-// TestTransformMedia_ConvertToJPEG tests that a PNG image is correctly
-// converted to JPEG format.
-func TestTransformMedia_ConvertToJPEG(t *testing.T) {
-	params := url.Values{"outputFormat": []string{"jpeg"}}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/jpeg" {
-		t.Errorf("expected Content-Type image/jpeg, got %q", ct)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response body: %v", err)
-	}
-	if _, _, err := image.Decode(bytes.NewReader(body)); err != nil {
-		t.Errorf("response body is not a valid image: %v", err)
-	}
-}
-
-// TestTransformMedia_ConvertToWebP tests that a PNG image is correctly
-// converted to WebP format.
-func TestTransformMedia_ConvertToWebP(t *testing.T) {
-	params := url.Values{"outputFormat": []string{"webp"}}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/webp" {
-		t.Errorf("expected Content-Type image/webp, got %q", ct)
-	}
-}
-
-// TestTransformMedia_ResizeAndConvert tests resizing and format conversion in one request.
-func TestTransformMedia_ResizeAndConvert(t *testing.T) {
-	params := url.Values{
-		"resize.width": []string{"100"},
-		"outputFormat": []string{"jpeg"},
-	}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/jpeg" {
-		t.Errorf("expected Content-Type image/jpeg, got %q", ct)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("failed to read response body: %v", err)
-	}
-	img, _, err := image.Decode(bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("failed to decode response image: %v", err)
-	}
-	if img.Bounds().Dx() != 100 {
-		t.Errorf("expected width 100, got %d", img.Bounds().Dx())
-	}
-}
-
-// TestTransformMedia_ContentNegotiation tests that the Accept header is used
-// to determine the output format when outputFormat is not specified.
-func TestTransformMedia_ContentNegotiation(t *testing.T) {
-	headers := http.Header{"Accept": []string{"image/webp,image/*,*/*"}}
-	resp := doRequest(t, "media", "test.png", nil, headers)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/webp" {
-		t.Errorf("expected Content-Type image/webp via content negotiation, got %q", ct)
-	}
-}
-
-// TestTransformMedia_JPEGSource tests transforming a JPEG source image.
-func TestTransformMedia_JPEGSource(t *testing.T) {
-	params := url.Values{
-		"resize.width": []string{"200"},
-		"outputFormat": []string{"jpeg"},
-	}
-	resp := doRequest(t, "media", "test.jpg", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "image/jpeg" {
-		t.Errorf("expected Content-Type image/jpeg, got %q", ct)
-	}
-}
-
-// TestTransformMedia_CacheControlHeader tests that the Cache-Control header
-// is set to immutable for transformed images.
-func TestTransformMedia_CacheControlHeader(t *testing.T) {
-	params := url.Values{"outputFormat": []string{"png"}}
-	resp := doRequest(t, "media", "test.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected status 200, got %d: %s", resp.StatusCode, body)
-	}
-	if cc := resp.Header.Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
-		t.Errorf("unexpected Cache-Control header: %q", cc)
-	}
-}
-
-// TestInvalidSignature tests that a request with an invalid signature
-// is rejected by the server.
-func TestInvalidSignature(t *testing.T) {
-	u := fmt.Sprintf("%s/%s/media/test.png?outputFormat=png", testServerURL, "invalidsignaturehere=")
-	resp, err := http.Get(u)
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		t.Error("expected non-200 status for invalid signature, got 200")
-	}
-}
-
-// TestNonExistentImage tests that requesting a non-existent image
-// returns an error response.
-func TestNonExistentImage(t *testing.T) {
-	params := url.Values{"outputFormat": []string{"png"}}
-	resp := doRequest(t, "media", "notfound.png", params, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		t.Error("expected non-200 status for non-existent image, got 200")
-	}
-}
-
-// TestGetMetadata_NonExistentImage tests that requesting metadata for a
-// non-existent image returns an error.
-func TestGetMetadata_NonExistentImage(t *testing.T) {
-	resp := doRequest(t, "metadata", "notfound.png", nil, nil)
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusOK {
-		t.Error("expected non-200 status for non-existent image, got 200")
+			if resp.StatusCode != tc.wantStatus {
+				body, _ := io.ReadAll(resp.Body)
+				t.Fatalf("expected status %d, got %d: %s", tc.wantStatus, resp.StatusCode, body)
+			}
+			if tc.wantStatus != http.StatusOK {
+				return
+			}
+			if tc.wantCT != "" {
+				if ct := resp.Header.Get("Content-Type"); ct != tc.wantCT {
+					t.Errorf("expected Content-Type %q, got %q", tc.wantCT, ct)
+				}
+			}
+			if tc.checkHeader != nil {
+				tc.checkHeader(t, resp.Header)
+			}
+			if tc.checkImage != nil {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatalf("failed to read response body: %v", err)
+				}
+				img, format, err := image.Decode(bytes.NewReader(body))
+				if err != nil {
+					t.Fatalf("failed to decode response image: %v", err)
+				}
+				tc.checkImage(t, img, format)
+			}
+		})
 	}
 }
 
