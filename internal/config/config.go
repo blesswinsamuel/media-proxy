@@ -75,11 +75,6 @@ func ParseConfig(args []string) (*Config, error) {
 	if c.BaseURL != "" {
 		c.BaseURL = c.BaseURL + "/"
 	}
-	if !c.EnableUnsafe.Value {
-		if c.Secret == "" {
-			log.Fatal().Msg("SECRET must be set when ENABLE_UNSAFE=false")
-		}
-	}
 
 	return c, nil
 }
@@ -112,7 +107,11 @@ func handleFlagError(err error) error {
 
 // Validate validates a config object
 func (c *Config) Validate() {
-	// Check for show stopper errors
+	if !c.EnableUnsafe.Value {
+		if c.Secret == "" {
+			log.Fatal().Msg("SECRET must be set when ENABLE_UNSAFE=false")
+		}
+	}
 }
 
 func (c Config) String() string {
