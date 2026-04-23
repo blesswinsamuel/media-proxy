@@ -3,7 +3,6 @@ package cache
 import (
 	"io"
 	"os"
-	"path"
 	"path/filepath"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,7 +38,7 @@ func NewFsCache(cachePath string) Cache {
 
 // Get gets the file from local filesystem
 func (c *FsCache) Get(key string) ([]byte, error) {
-	filePath := path.Join(c.cachePath, key)
+	filePath := filepath.Join(c.cachePath, key)
 	file, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -56,7 +55,7 @@ func (c *FsCache) Put(key string, data []byte) error {
 	if err := os.MkdirAll(c.cachePath, 0755); err != nil {
 		return err
 	}
-	filePath := path.Join(c.cachePath, key)
+	filePath := filepath.Join(c.cachePath, key)
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -70,7 +69,7 @@ func (c *FsCache) Put(key string, data []byte) error {
 
 // Exists checks if a file exists in the filesystem cache
 func (c *FsCache) Exists(key string) (bool, error) {
-	filePath := path.Join(c.cachePath, key)
+	filePath := filepath.Join(c.cachePath, key)
 	if _, err := os.Stat(filePath); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil

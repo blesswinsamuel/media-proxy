@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 	"os/signal"
-	"path"
+	"path/filepath"
 	"syscall"
 
 	"github.com/blesswinsamuel/media-proxy/internal/cache"
@@ -95,13 +95,13 @@ func main() {
 	// }()
 	var loaderCache, metadataCache, resultCache cache.Cache
 	if config.EnableLoaderCache.Value {
-		loaderCache = cache.NewFsCache(path.Join(config.CacheDir, "original"))
+		loaderCache = cache.NewFsCache(filepath.Join(config.CacheDir, "original"))
 	} else {
 		loaderCache = cache.NewNoopCache()
 	}
 	if config.EnableResultCache.Value {
-		metadataCache = cache.NewFsCache(path.Join(config.CacheDir, "metadata"))
-		resultCache = cache.NewFsCache(path.Join(config.CacheDir, "result"))
+		metadataCache = cache.NewFsCache(filepath.Join(config.CacheDir, "metadata"))
+		resultCache = cache.NewFsCache(filepath.Join(config.CacheDir, "result"))
 	} else {
 		metadataCache = cache.NewNoopCache()
 		resultCache = cache.NewNoopCache()
