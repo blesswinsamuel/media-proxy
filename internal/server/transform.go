@@ -8,7 +8,6 @@ import (
 
 	"github.com/blesswinsamuel/media-proxy/internal/cache"
 	"github.com/blesswinsamuel/media-proxy/internal/mediaprocessor"
-	"github.com/gorilla/schema"
 	"github.com/rs/zerolog/log"
 )
 
@@ -91,9 +90,7 @@ func (s *server) handleTransformRequest(w http.ResponseWriter, r *http.Request) 
 
 func parseTransformQuery(query url.Values) (*mediaprocessor.TransformOptions, error) {
 	transformOpts := &mediaprocessor.TransformOptions{}
-	var decoder = schema.NewDecoder()
-	decoder.SetAliasTag("query")
-	if err := decoder.Decode(transformOpts, query); err != nil {
+	if err := queryDecoder.Decode(transformOpts, query); err != nil {
 		return nil, err
 	}
 	return transformOpts, nil

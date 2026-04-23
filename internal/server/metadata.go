@@ -6,15 +6,12 @@ import (
 
 	"github.com/blesswinsamuel/media-proxy/internal/cache"
 	"github.com/blesswinsamuel/media-proxy/internal/mediaprocessor"
-	"github.com/gorilla/schema"
 	"github.com/rs/zerolog/log"
 )
 
 func parseMetadataQuery(query url.Values) (*mediaprocessor.MetadataOptions, error) {
 	metadataOpts := &mediaprocessor.MetadataOptions{}
-	var decoder = schema.NewDecoder()
-	decoder.SetAliasTag("query")
-	if err := decoder.Decode(metadataOpts, query); err != nil {
+	if err := queryDecoder.Decode(metadataOpts, query); err != nil {
 		return nil, err
 	}
 	return metadataOpts, nil
