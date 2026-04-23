@@ -42,7 +42,7 @@ func (c *VipsPrometheusCollector) Collect(ch chan<- prometheus.Metric) {
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc("media_proxy_vips_memory_allocs", "", nil, nil),
 		prometheus.GaugeValue,
-		float64(memoryStats.MemHigh),
+		float64(memoryStats.Allocs),
 	)
 	ch <- prometheus.MustNewConstMetric(
 		prometheus.NewDesc("media_proxy_vips_memory_files", "", nil, nil),
