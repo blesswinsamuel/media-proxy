@@ -52,8 +52,6 @@ type ServerConfig struct {
 	MetricsPort  string
 	Secret       string
 	EnableUnsafe bool
-	AutoAvif     bool
-	AutoWebp     bool
 	Concurrency  int
 }
 

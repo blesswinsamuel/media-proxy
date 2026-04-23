@@ -116,8 +116,6 @@ func main() {
 		MetricsPort:  config.MetricsPort,
 		Secret:       config.Secret,
 		EnableUnsafe: bool(config.EnableUnsafe.Value),
-		AutoAvif:     true,
-		AutoWebp:     true,
 		Concurrency:  config.Concurrency,
 	}, mediaProcessor, loader, loaderCache, metadataCache, resultCache)
 
